@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light;
+  color: #1f2937; /* gray-800 - dark text for light theme */
+  background-color: #ffffff;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+/* Force dark text in AI tutor chat messages */
+.ai-tutor-message,
+.ai-tutor-message *,
+.ai-tutor-message p,
+.ai-tutor-message div,
+.ai-tutor-message span {
+  color: #1f2937 !important;
+}
+
+/* Override prose text colors */
+.prose,
+.prose *,
+.prose p,
+.prose div,
+.prose span {
+  color: #1f2937 !important;
+}
+
+/* Ensure input text is dark */
+input[type="text"],
+input[type="text"]:focus {
+  color: #111827 !important;
+}
+

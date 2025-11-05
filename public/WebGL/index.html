@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Unity WebGL Player | 3DAvatar</title>
+    <link rel="shortcut icon" href="TemplateData/favicon.ico">
+    <link rel="stylesheet" href="TemplateData/style.css">
+  </head>
+  <body>
+    <div id="unity-container" class="unity-desktop">
+      <canvas id="unity-canvas" width=960 height=600 tabindex="-1" style="display: block; opacity: 0;"></canvas>
+      
+      <!-- ✅ Custom Loading Screen - Attractive Loader Design -->
+      <div id="custom-loading-screen" style="
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #000000;
+        z-index: 1000;
+        min-height: 100%;
+      ">
+        <!-- Attractive Multi-Ring Loader -->
+        <div style="
+          position: relative;
+          width: 120px;
+          height: 120px;
+          margin-bottom: 30px;
+        ">
+          <!-- Outer Ring -->
+          <div id="loading-spinner-outer" style="
+            position: absolute;
+            width: 120px;
+            height: 120px;
+            border: 4px solid rgba(147, 51, 234, 0.2);
+            border-top: 4px solid #9333ea;
+            border-right: 4px solid #a855f7;
+            border-radius: 50%;
+            animation: spin 1.2s linear infinite;
+          "></div>
+          
+          <!-- Middle Ring -->
+          <div id="loading-spinner-middle" style="
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            width: 90px;
+            height: 90px;
+            border: 3px solid rgba(59, 130, 246, 0.2);
+            border-top: 3px solid #3b82f6;
+            border-right: 3px solid #60a5fa;
+            border-radius: 50%;
+            animation: spin 1s linear infinite reverse;
+          "></div>
+          
+          <!-- Inner Ring -->
+          <div id="loading-spinner-inner" style="
+            position: absolute;
+            top: 30px;
+            left: 30px;
+            width: 60px;
+            height: 60px;
+            border: 2px solid rgba(236, 72, 153, 0.2);
+            border-top: 2px solid #ec4899;
+            border-right: 2px solid #f472b6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+          "></div>
+          
+          <!-- Center Pulse -->
+          <div id="loading-spinner-center" style="
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            background: linear-gradient(135deg, #9333ea, #3b82f6, #ec4899);
+            border-radius: 50%;
+            animation: pulse 1.5s ease-in-out infinite;
+            box-shadow: 0 0 20px rgba(147, 51, 234, 0.6);
+          "></div>
+        </div>
+        
+        <!-- Loading Text -->
+        <p id="loading-text" style="
+          color: white;
+          font-weight: 600;
+          font-size: 18px;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+          display: block;
+          letter-spacing: 1px;
+          background: rgba(0, 0, 0, 0.4);
+          padding: 10px 20px;
+          border-radius: 12px;
+          backdrop-filter: blur(8px);
+        ">Loading AI Avatar... 0%</p>
+        
+        <script>
+          // ✅ Simple initialization - loader is already styled
+          const loadingText = document.getElementById('loading-text');
+          if (loadingText) {
+            console.log('[Loading Screen] ✅ Attractive loader initialized');
+          }
+        </script>
+        
+        <style>
+          @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+          }
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+          
+          @keyframes pulse {
+            0%, 100% { 
+              transform: translate(-50%, -50%) scale(1);
+              opacity: 1;
+            }
+            50% { 
+              transform: translate(-50%, -50%) scale(1.3);
+              opacity: 0.7;
+            }
+          }
+          
+          /* Hide loading text in very small compact views */
+          @media (max-width: 200px), (max-height: 250px) {
+            #loading-text {
+              display: none !important;
+            }
+          }
+        </style>
+      </div>
+      
+      <!-- Hide Unity's default loading elements -->
+      <div id="unity-loading-bar" style="display: none !important;">
+        <div id="unity-logo"></div>
+        <div id="unity-progress-bar-empty">
+          <div id="unity-progress-bar-full"></div>
+        </div>
+      </div>
+      <div id="unity-warning" style="display: none;"> </div>
+      <div id="unity-footer" style="display: none !important;">
+        <div id="unity-webgl-logo"></div>
+        <div id="unity-fullscreen-button"></div>
+        <div id="unity-build-title">3DAvatar</div>
+      </div>
+    </div>
+    <script>
+
+      var container = document.querySelector("#unity-container");
+      var canvas = document.querySelector("#unity-canvas");
+      var loadingBar = document.querySelector("#unity-loading-bar");
+      var progressBarFull = document.querySelector("#unity-progress-bar-full");
+      var fullscreenButton = document.querySelector("#unity-fullscreen-button");
+      var warningBanner = document.querySelector("#unity-warning");
+      var customLoadingScreen = document.querySelector("#custom-loading-screen");
+      
+      // ✅ Ensure custom loading screen is visible initially
+      if (customLoadingScreen) {
+        customLoadingScreen.style.display = "flex";
+        customLoadingScreen.style.visibility = "visible";
+        customLoadingScreen.style.opacity = "1";
+        console.log("[Loading Screen] ✅ Custom loading screen initialized and visible");
+      }
+
+      // Shows a temporary message banner/ribbon for a few seconds, or
+      // a permanent error message on top of the canvas if type=='error'.
+      // If type=='warning', a yellow highlight color is used.
+      // Modify or remove this function to customize the visually presented
+      // way that non-critical warnings and error messages are presented to the
+      // user.
+      function unityShowBanner(msg, type) {
+        function updateBannerVisibility() {
+          warningBanner.style.display = warningBanner.children.length ? 'block' : 'none';
+        }
+        var div = document.createElement('div');
+        div.innerHTML = msg;
+        warningBanner.appendChild(div);
+        if (type == 'error') div.style = 'background: red; padding: 10px;';
+        else {
+          if (type == 'warning') div.style = 'background: yellow; padding: 10px;';
+          setTimeout(function() {
+            warningBanner.removeChild(div);
+            updateBannerVisibility();
+          }, 5000);
+        }
+        updateBannerVisibility();
+      }
+
+      var buildUrl = "Build";
+      var loaderUrl = buildUrl + "/Build.loader.js";
+      var config = {
+        dataUrl: buildUrl + "/Build.data",
+        frameworkUrl: buildUrl + "/Build.framework.js",
+        codeUrl: buildUrl + "/Build.wasm",
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: "XR AI Technolab Pvt. Ltd.",
+        productName: "3DAvatar",
+        productVersion: "1.02",
+        showBanner: unityShowBanner,
+        // Critical settings to prevent recursion
+        matchWebGLToCanvasSize: false,
+        autoSyncPersistentDataPath: false,
+        devicePixelRatio: 1,
+        // Memory management
+        memorySize: 256 * 1024 * 1024, // 256MB
+        // Disable problematic features
+        enableExceptionHandling: false,
+        // Unity specific optimizations
+        unityVersion: "2022.3.0f1",
+        // Prevent infinite loops
+        maxMemorySize: 512 * 1024 * 1024, // 512MB max
+        // Camera settings for face focus
+        preserveDrawingBuffer: false,
+        powerPreference: "high-performance",
+        // Avatar specific settings
+        avatarMode: window !== window.top ? "portrait" : "full", // Portrait mode for iframe
+      };
+
+      // Expanded mode detection via query param
+      const params = new URLSearchParams(window.location.search);
+      const isExpanded = params.get('mode') === 'expanded';
+
+      // By default, Unity keeps WebGL canvas render target size matched with
+      // the DOM size of the canvas element (scaled by window.devicePixelRatio)
+      // Set this to false if you want to decouple this synchronization from
+      // happening inside the engine, and you would instead like to size up
+      // the canvas DOM size and WebGL render target sizes yourself.
+      // config.matchWebGLToCanvasSize = false;
+
+      // If you would like all file writes inside Unity Application.persistentDataPath
+      // directory to automatically persist so that the contents are remembered when
+      // the user revisits the site the next time, uncomment the following line:
+      // config.autoSyncPersistentDataPath = true;
+      // This autosyncing is currently not the default behavior to avoid regressing
+      // existing user projects that might rely on the earlier manual
+      // JS_FileSystem_Sync() behavior, but in future Unity version, this will be
+      // expected to change.
+
+      if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+        // Mobile device style: fill the whole browser client area with the game canvas:
+
+        var meta = document.createElement('meta');
+        meta.name = 'viewport';
+        meta.content = 'width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes';
+        document.getElementsByTagName('head')[0].appendChild(meta);
+        container.className = "unity-mobile";
+        canvas.className = "unity-mobile";
+
+        // To lower canvas resolution on mobile devices to gain some
+        // performance, uncomment the following line:
+        // config.devicePixelRatio = 1;
+
+
+      } else {
+        // Desktop style: Render the game canvas in a window that can be maximized to fullscreen:
+        // Check if we're in an iframe (compact view)
+        if (window !== window.top && !isExpanded) {
+          // Compact view - CIRCULAR frame (perfect circle)
+          canvas.style.width = "100%";
+          canvas.style.height = "100%";
+          canvas.style.objectFit = "cover";
+          canvas.style.objectPosition = "center center"; // Center the avatar face
+          canvas.style.display = "block";
+          canvas.style.margin = "0";
+          canvas.style.borderRadius = "50%"; // Make canvas circular
+          // Hide Unity UI elements in compact view
+          container.style.background = "transparent";
+          // CRITICAL: Make container perfectly circular
+          container.style.overflow = "hidden";
+          container.style.borderRadius = "50%"; // Perfect circle
+          container.style.aspectRatio = "1 / 1"; // 1:1 for perfect circle
+          container.style.width = "100%";
+          container.style.height = "100%";
+        } else {
+          // Full view
+        canvas.style.width = isExpanded ? "100%" : "960px";
+        canvas.style.height = isExpanded ? "100%" : "600px";
+        canvas.style.objectFit = isExpanded ? "contain" : canvas.style.objectFit;
+        container.style.width = isExpanded ? "100%" : container.style.width;
+        container.style.height = isExpanded ? "100%" : container.style.height;
+        }
+      }
+
+      // ✅ Hide Unity's default loading bar (we have custom loading screen)
+      loadingBar.style.display = "none";
+
+      var script = document.createElement("script");
+      script.src = loaderUrl;
+      
+      // Handle script load error
+      script.onerror = () => {
+        console.error("[Unity] ❌ Failed to load Build.loader.js from:", loaderUrl);
+        
+        // Hide loading screen and show error
+        if (customLoadingScreen) {
+          customLoadingScreen.style.display = "none";
+        }
+        canvas.style.display = "block";
+        
+        const errorDiv = document.createElement('div');
+        errorDiv.style.cssText = 'position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(255,0,0,0.9); color: white; padding: 20px; border-radius: 10px; text-align: center; z-index: 1000; max-width: 500px;';
+        errorDiv.innerHTML = `
+          <h3>Unity Loader Script Failed</h3>
+          <p>Failed to load: <code>${loaderUrl}</code></p>
+          <p>Please check:</p>
+          <ul style="text-align: left; margin: 10px 0;">
+            <li>Build files exist in WebGL/Build folder</li>
+            <li>Server is running correctly</li>
+            <li>Browser console for network errors</li>
+          </ul>
+          <button onclick="location.reload()" style="margin-top: 10px; padding: 8px 16px; background: white; color: red; border: none; border-radius: 4px; cursor: pointer;">Reload Page</button>
+        `;
+        container.appendChild(errorDiv);
+      };
+      
+      script.onload = () => {
+        console.log("[Unity] 🚀 Starting Unity instance creation with Brotli files");
+        console.log("[Unity] Config:", config);
+        
+        // ✅ New logic: Hide loading screen 2 seconds AFTER avatar loading completes
+        // No fixed timer - wait for Unity to be ready, then add 2 seconds
+        window.unityReady = false; // Track if Unity is ready
+        window.loadingScreenHidden = false; // Track if loading screen is hidden
+        window.avatarReadyTimer = null; // Store the 2-second timer
+        
+        // Check if createUnityInstance exists
+        if (typeof createUnityInstance === 'undefined') {
+          console.error("[Unity] ❌ createUnityInstance not found! Check if Build.loader.js loaded correctly.");
+          
+          // Hide loading screen and show error
+          if (customLoadingScreen) {
+            customLoadingScreen.style.display = "none";
+          }
+          canvas.style.opacity = "1";
+          
+          const errorDiv = document.createElement('div');
+          errorDiv.style.cssText = 'position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(255,0,0,0.9); color: white; padding: 20px; border-radius: 10px; text-align: center; z-index: 1000; max-width: 500px;';
+          errorDiv.innerHTML = `
+            <h3>Unity Loader Not Found</h3>
+            <p>Build.loader.js failed to load or createUnityInstance is undefined.</p>
+            <p>Please check:</p>
+            <ul style="text-align: left; margin: 10px 0;">
+              <li>Build files are accessible</li>
+              <li>Browser console for errors</li>
+              <li>Network tab for failed requests</li>
+            </ul>
+            <button onclick="location.reload()" style="margin-top: 10px; padding: 8px 16px; background: white; color: red; border: none; border-radius: 4px; cursor: pointer;">Reload Page</button>
+          `;
+          container.appendChild(errorDiv);
+          return;
+        }
+        
+        // Add loading timeout
+        const loadingTimeout = setTimeout(() => {
+          console.error("[Unity] ❌ Loading timeout after 30 seconds");
+          loadingBar.style.display = "none";
+          
+          // Clear avatar ready timer if it exists
+          if (window.avatarReadyTimer) {
+            clearTimeout(window.avatarReadyTimer);
+            window.avatarReadyTimer = null;
+          }
+          
+          // ✅ Hide custom loading screen on timeout
+          if (customLoadingScreen) {
+            customLoadingScreen.style.display = "none";
+            console.log("[Unity] ✅ Custom loading screen hidden (timeout)");
+          }
+          canvas.style.opacity = "1";
+          
+          const timeoutDiv = document.createElement('div');
+          timeoutDiv.style.cssText = 'position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(255,165,0,0.9); color: white; padding: 20px; border-radius: 10px; text-align: center; z-index: 1000;';
+          timeoutDiv.innerHTML = `
+            <h3>Unity Loading Timeout</h3>
+            <p>Unity is taking too long to load. This might be due to:</p>
+            <ul style="text-align: left; margin: 10px 0;">
+              <li>Large build size</li>
+              <li>Browser compatibility issues</li>
+              <li>Memory constraints</li>
+            </ul>
+            <p>Please try refreshing the page or check console for details.</p>
+          `;
+          container.appendChild(timeoutDiv);
+        }, 30000); // 30 second timeout
+        
+        console.log("[Unity] 📊 Creating Unity instance...");
+        createUnityInstance(canvas, config, (progress) => {
+          progressBarFull.style.width = 100 * progress + "%";
+          console.log(`[Unity] Loading progress: ${Math.round(progress * 100)}%`);
+          
+          // Update loading text with progress
+          if (customLoadingScreen) {
+            const loadingText = document.getElementById('loading-text');
+            if (loadingText) {
+              const progressPercent = Math.round(progress * 100);
+              loadingText.textContent = `Loading AI Avatar... ${progressPercent}%`;
+              
+              // Optional: Add visual feedback when complete
+              if (progressPercent >= 100) {
+                const centerPulse = document.getElementById('loading-spinner-center');
+                if (centerPulse) {
+                  centerPulse.style.boxShadow = '0 0 30px rgba(34, 197, 94, 0.8)'; // Green glow when complete
+                }
+              }
+            }
+          }
+          
+          // Clear timeout if we reach 100%
+          if (progress >= 1.0) {
+            clearTimeout(loadingTimeout);
+            console.log("[Unity] ✅ Loading progress reached 100%");
+          }
+              }).then((unityInstance) => {
+          clearTimeout(loadingTimeout);
+          console.log("[Unity] ✅ Unity instance created successfully!");
+          
+          // ✅ Mark Unity as ready
+          window.unityReady = true;
+          console.log("[Unity] ✅ Avatar loading complete! Waiting 2 seconds before hiding loading screen...");
+          
+          // ✅ Wait 2 seconds AFTER avatar is ready, then hide loading screen
+          window.avatarReadyTimer = setTimeout(() => {
+            console.log("[Unity] ⏰ 2 seconds passed after avatar ready - Hiding loading screen");
+            
+            // Hide loading screen
+            if (customLoadingScreen) {
+              customLoadingScreen.style.display = "none";
+              console.log("[Unity] ✅ Custom loading screen hidden (2 seconds after avatar ready)");
+            }
+            
+            // Show Unity canvas (fade in)
+            canvas.style.opacity = "1";
+            canvas.style.transition = "opacity 0.3s ease-in";
+            console.log("[Unity] ✅ Canvas displayed");
+            
+            // Mark that we've hidden loading screen
+            window.loadingScreenHidden = true;
+          }, 2000); // 2 seconds after avatar is ready
+          
+          // Hide Unity's default loading bar and footer
+          loadingBar.style.display = "none";
+          
+          fullscreenButton.onclick = () => {
+            unityInstance.SetFullscreen(1);
+          };
+          
+          // Store Unity instance globally for communication
+          window.unityInstance = unityInstance;
+          console.log("[Unity] ✅ Unity instance ready for communication");
+          
+          // ✅ Auto-unlock audio now that Unity is ready (from working file)
+          if (typeof tryAutoUnlockAudio === 'function') {
+            tryAutoUnlockAudio();
+          }
+          
+          // Set camera mode for portrait/face focus if in iframe
+          if (window !== window.top && !isExpanded) {
+            console.log("[Unity] 📸 Setting portrait mode for face focus");
+            try {
+              // Send camera adjustment message to Unity
+              unityInstance.SendMessage('AvatarController', 'SetCameraMode', 'portrait');
+              console.log("[Unity] ✅ Camera set to portrait mode");
+            } catch (error) {
+              console.log("[Unity] ⚠️ Camera mode setting not available:", error.message);
+            }
+          }
+          
+          // Process any pending phoneme data
+          if (window.pendingPhonemeData) {
+            console.log("[Unity] 🎭 Processing pending phoneme data:", window.pendingPhonemeData);
+            try {
+              // Ensure it's a JSON string
+              const pendingJson = typeof window.pendingPhonemeData === 'string' 
+                ? window.pendingPhonemeData 
+                : JSON.stringify(window.pendingPhonemeData);
+              
+              console.log("[Unity] 📤 Sending pending data to AvatarController:", pendingJson);
+              unityInstance.SendMessage('AvatarController', 'PlayPhonemeSequence', pendingJson);
+              console.log("[Unity] ✅ Successfully processed pending phoneme data");
+              window.pendingPhonemeData = null;
+            } catch (error) {
+              console.error("[Unity] ❌ Error processing pending phoneme data:", error);
+              console.error("[Unity] ❌ Error details:", error.message);
+            }
+          }
+          
+      // 🎵 AUDIO: Auto-unlock AudioContext (no button needed - automatic)
+      var audioCtx = null;
+      var audioUnlocked = false;
+      var pendingAudio = null;
+      var audioElement = new Audio();
+      audioElement.crossOrigin = 'anonymous';
+      var analyser = null;
+      var dataArray = null;
+      var animationFrameId = null;
+      
+      // 🎵 HTML5 AUDIO FALLBACK: Play audio with phoneme synchronization (node-vakta pattern)
+      // ✅ Audio queue for continuous playback (no gaps)
+      var audioQueue = [];
+      var isPlayingAudio = false;
+      var currentAudioBlobUrl = null;
+      
+      function playHtmlAudioFallback(audioDataOrUrl, audioId, phonemes) {
+        console.log('[Unity] 🎵 Received audio chunk:', audioId);
+        
+        // ✅ Add to queue for seamless continuous playback
+        audioQueue.push({
+          audioDataOrUrl: audioDataOrUrl,
+          audioId: audioId,
+          phonemes: phonemes
+        });
+        
+        console.log('[Unity] 📊 Audio queue length:', audioQueue.length);
+        
+        // ✅ Start playing if not already playing
+        if (!isPlayingAudio) {
+          playNextInQueue();
+        } else {
+          console.log('[Unity] 🎵 Audio already playing, chunk queued for seamless playback');
+        }
+      }
+      
+      // ✅ Continuous playback function - plays chunks one after another without gaps
+      function playNextInQueue() {
+        if (audioQueue.length === 0) {
+          isPlayingAudio = false;
+          console.log('[Unity] 📭 Audio queue empty');
+          return;
+        }
+        
+        isPlayingAudio = true;
+        const chunk = audioQueue.shift();
+        const { audioDataOrUrl, audioId, phonemes } = chunk;
+        
+        console.log('[Unity] ▶️ Playing queued audio:', audioId, 'Remaining:', audioQueue.length);
+        
+        // ✅ Clean up previous blob URL (from previous chunk)
+        if (currentAudioBlobUrl && currentAudioBlobUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(currentAudioBlobUrl);
+          currentAudioBlobUrl = null;
+        }
+        
+        // Setup Web Audio API for analysis (optional, for amplitude-based fallback)
+        var AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!audioCtx) audioCtx = new AudioContext();
+        
+        // ✅ Handle base64 audio data (node-vakta pattern) or URL
+        let audioSrc;
+        if (typeof audioDataOrUrl === 'string' && audioDataOrUrl.length > 500 && !audioDataOrUrl.startsWith('http')) {
+          // Base64 data - convert to blob URL
+          console.log('[Unity] 📦 Using base64 audio data');
+          var audioBlob = base64ToBlob(audioDataOrUrl, 'audio/mpeg');
+          audioSrc = URL.createObjectURL(audioBlob);
+          currentAudioBlobUrl = audioSrc; // Track for cleanup
+        } else {
+          // URL - fetch and convert to blob for seamless playback
+          console.log('[Unity] 🔗 Using audio URL:', audioDataOrUrl);
+          // For continuous playback, we'll fetch and create blob URL
+          fetch(audioDataOrUrl)
+            .then(response => response.blob())
+            .then(blob => {
+              audioSrc = URL.createObjectURL(blob);
+              currentAudioBlobUrl = audioSrc;
+              setupAndPlayAudio(audioSrc, audioId, phonemes);
+            })
+            .catch(err => {
+              console.error('[Unity] ❌ Failed to fetch audio URL, using directly:', err);
+              audioSrc = audioDataOrUrl;
+              setupAndPlayAudio(audioSrc, audioId, phonemes);
+            });
+          return; // Return early, will play after fetch
+        }
+        
+        setupAndPlayAudio(audioSrc, audioId, phonemes);
+      }
+      
+      // ✅ Setup and play audio with seamless transition
+      function setupAndPlayAudio(audioSrc, audioId, phonemes) {
+        // Play audio
+        audioElement.src = audioSrc;
+        
+        // Remove previous event listeners to prevent duplicates
+        audioElement.onplay = null;
+        audioElement.onended = null;
+        
+        audioElement.onplay = function() {
+          console.log('[Unity] ✅ HTML5 Audio playing, sending phonemes to Unity:', audioId);
+          
+          // ✅ Send phonemes to Unity for lip-sync (node-vakta format: { phonemes: [...] })
+          if (phonemes && phonemes.length > 0 && window.unityInstance) {
+            try {
+              const phonemeData = { phonemes: phonemes };
+              const phonemeJson = JSON.stringify(phonemeData);
+              console.log('[Unity] 📤 Sending phonemes to Unity:', phonemes.length, 'phonemes');
+              window.unityInstance.SendMessage('AvatarController', 'PlayPhonemeSequence', phonemeJson);
+              console.log('[Unity] ✅✅✅ PlayPhonemeSequence SUCCESSFULLY CALLED! ✅✅✅');
+            } catch (e) {
+              console.error('[Unity] ❌❌❌ Failed to send phonemes:', e.toString());
+              console.error('[Unity] ❌ Error stack:', e.stack);
+            }
+          }
+        };
+        
+        // ✅ CRITICAL: Seamless transition - when current audio ends, immediately play next
+        audioElement.onended = function() {
+          console.log('[Unity] ✅ Audio playback completed:', audioId);
+          
+          // Clean up blob URL if created
+          if (currentAudioBlobUrl && currentAudioBlobUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(currentAudioBlobUrl);
+            currentAudioBlobUrl = null;
+          }
+          
+          // ✅ IMMEDIATELY play next chunk in queue (no delay, continuous playback)
+          if (audioQueue.length > 0) {
+            console.log('[Unity] 🔄 Playing next chunk in queue immediately (seamless)...');
+            playNextInQueue(); // Recursive call - plays next chunk
+          } else {
+            isPlayingAudio = false;
+            console.log('[Unity] 📭 Queue empty, playback stopped');
+          }
+          
+          // Notify React that audio ended (for queue management)
+          var targetOrigin = trustedParentOrigin || '*';
+          try {
+            window.parent.postMessage({
+              type: 'AUDIO_ENDED',
+              payload: { id: audioId }
+            }, targetOrigin);
+            console.log('[Unity] 📤 Notified React: AUDIO_ENDED for', audioId);
+          } catch (e) {
+            console.warn('[Unity] ⚠️ Failed to notify audio end:', e);
+          }
+        };
+        
+        // ✅ Play audio immediately (no delay)
+        audioElement.play().catch(function(err) {
+          console.error('[Unity] ❌ Audio play failed:', err);
+          // If play fails, try next in queue
+          if (audioQueue.length > 0) {
+            playNextInQueue();
+          } else {
+            isPlayingAudio = false;
+          }
+        });
+      }
+      
+      // 🔄 HELPER: Convert base64 to Blob (from node-vakta)
+      function base64ToBlob(base64, mimeType) {
+        var byteCharacters = atob(base64);
+        var byteNumbers = new Array(byteCharacters.length);
+        for (var i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        var byteArray = new Uint8Array(byteNumbers);
+        return new Blob([byteArray], { type: mimeType });
+      }
+      
+      // ✅ AUTO-UNLOCK AUDIO: Automatically unlock when Unity is ready (no button needed)
+      function autoUnlockAudio() {
+        if (audioUnlocked) return;
+        
+        console.log('[Unity] 🔓 Auto-unlocking audio...');
+        var AudioContext = window.AudioContext || window.webkitAudioContext;
+        
+        if (!audioCtx) {
+          audioCtx = new AudioContext();
+        }
+        
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume().then(function() {
+            if (audioCtx.state === 'running') {
+              audioUnlocked = true;
+              console.log('[Unity] ✅ Audio auto-unlocked successfully');
+              
+              // Play queued audio if any
+              if (pendingAudio) {
+                console.log('[Unity] ✅ Playing queued audio after auto-unlock');
+                const audioToPlay = pendingAudio.audioData || pendingAudio.audioUrl;
+                playHtmlAudioFallback(audioToPlay, pendingAudio.audioId, pendingAudio.phonemes);
+                pendingAudio = null;
+              }
+            }
+          }).catch(function(err) {
+            console.warn('[Unity] ⚠️ Auto-unlock failed (will retry on first audio):', err);
+          });
+        } else if (audioCtx.state === 'running') {
+          audioUnlocked = true;
+          console.log('[Unity] ✅ Audio already running - unlocked');
+          
+          if (pendingAudio) {
+            const audioToPlay = pendingAudio.audioData || pendingAudio.audioUrl;
+            playHtmlAudioFallback(audioToPlay, pendingAudio.audioId, pendingAudio.phonemes);
+            pendingAudio = null;
+          }
+        }
+      }
+      
+      // ✅ Auto-unlock when Unity is ready
+      function tryAutoUnlockAudio() {
+        autoUnlockAudio();
+      }
+      
+      // Listen for messages from parent window (React)
+      window.addEventListener('message', function(event) {
+        // Handle phoneme sequence with audio (WORKING PATTERN from node-vakta)
+        if (event.data.type === 'PLAY_TTS_WITH_PHONEMES') {
+          console.log('[Unity] 🎵 PLAY_TTS_WITH_PHONEMES received');
+          
+          const audioUrl = event.data.payload.audioUrl || '';
+          const audioData = event.data.payload.audioData || ''; // Base64 audio (from node-vakta pattern)
+          const phonemes = event.data.payload.phonemes || [];
+          const audioId = event.data.payload.id || 'tts-' + Date.now();
+          
+          console.log('[Unity] 📊 Audio URL:', audioUrl);
+          console.log('[Unity] 📊 Audio Data (base64):', audioData ? audioData.length + ' chars' : 'none');
+          console.log('[Unity] 📊 Phonemes count:', phonemes.length);
+          console.log('[Unity] 📊 Audio unlocked:', audioUnlocked);
+          
+          if (!window.unityInstance) {
+            console.warn('[Unity] ⏳ Unity not ready yet, queuing...');
+            window.pendingPhonemeData = { phonemes: phonemes, audioUrl: audioUrl, audioData: audioData };
+            return;
+          }
+          
+          // ✅ Send directly to seamless queue (Unity handles fetching/playing continuously)
+          // Use audioUrl if available (Unity will fetch), otherwise use audioData
+          if (audioUnlocked) {
+            const audioToPlay = audioUrl || audioData;
+            if (audioToPlay && phonemes.length > 0) {
+              console.log('[Unity] ✅ Adding audio chunk to seamless queue');
+              playHtmlAudioFallback(audioToPlay, audioId, phonemes);
+            } else {
+              console.error('[Unity] ❌ Missing data - URL:', !!audioUrl, 'Data:', !!audioData, 'Phonemes:', phonemes.length);
+            }
+          } else {
+            console.warn('[Unity] ⚠️ Audio not unlocked, attempting auto-unlock...');
+            // Try to auto-unlock first
+            autoUnlockAudio();
+            
+            // If still not unlocked, queue for later
+            if (!audioUnlocked) {
+              pendingAudio = { audioUrl: audioUrl, audioData: audioData, audioId: audioId, phonemes: phonemes };
+              console.log('[Unity] 📦 Audio queued - will play after unlock');
+            } else {
+              // Auto-unlock succeeded, play immediately
+              const audioToPlay = audioUrl || audioData;
+              if (audioToPlay && phonemes.length > 0) {
+                playHtmlAudioFallback(audioToPlay, audioId, phonemes);
+              }
+            }
+          }
+        }
+        
+        // Handle phoneme sequence only (legacy support)
+        if (event.data.type === 'PLAY_PHONEME_SEQUENCE') {
+          console.log("[Unity WebGL] 🎭 PLAY_PHONEME_SEQUENCE received");
+          
+          if (!window.unityInstance) {
+            console.warn("[Unity WebGL] ⏳ Unity not ready yet, storing data...");
+            window.pendingPhonemeData = event.data.data;
+            return;
+          }
+          
+          try {
+            let jsonString = event.data.data;
+            
+            if (typeof jsonString !== 'string') {
+              console.log("[Unity WebGL] 🔄 Converting object to JSON string");
+              jsonString = JSON.stringify(jsonString);
+            }
+            
+            console.log("[Unity WebGL] 📤 Calling Unity: AvatarController.PlayPhonemeSequence()");
+            window.unityInstance.SendMessage('AvatarController', 'PlayPhonemeSequence', jsonString);
+            console.log("[Unity WebGL] ✅ SendMessage executed successfully");
+            
+          } catch (error) {
+            console.error("[Unity WebGL] ❌ CRITICAL ERROR:", error);
+            console.error("[Unity WebGL] ❌ Error message:", error.message);
+            console.error("[Unity WebGL] ❌ Error stack:", error.stack);
+          }
+        }
+      });
+      
+      // Prevent iframe reload and maintain state
+      let isLoaded = false;
+      
+      window.addEventListener('beforeunload', function(e) {
+        if (isLoaded) {
+          e.preventDefault();
+          e.returnValue = '';
+          return false;
+        }
+      });
+      
+      // Mark as loaded when Unity is ready
+      window.addEventListener('load', function() {
+        isLoaded = true;
+      });
+          
+          // Test Unity communication - DISABLED to prevent auto-play
+          // Uncomment below to test Unity communication manually
+          // setTimeout(() => {
+          //   console.log("[Unity] 🧪 Testing Unity communication...");
+          //   testPhonemeSequence();
+          // }, 3000);
+          
+        }).catch((message) => {
+          clearTimeout(loadingTimeout);
+          
+          // Clear avatar ready timer if it exists
+          if (window.avatarReadyTimer) {
+            clearTimeout(window.avatarReadyTimer);
+            window.avatarReadyTimer = null;
+          }
+          
+          console.error("[Unity] ❌ Unity loading failed:", message);
+          loadingBar.style.display = "none";
+          
+          // ✅ Hide custom loading screen on error
+          if (customLoadingScreen) {
+            customLoadingScreen.style.display = "none";
+          }
+          canvas.style.opacity = "1";
+          
+          // Show detailed error message
+          const errorDiv = document.createElement('div');
+          errorDiv.style.cssText = 'position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(255,0,0,0.9); color: white; padding: 20px; border-radius: 10px; text-align: center; z-index: 1000; max-width: 500px;';
+          errorDiv.innerHTML = `
+            <h3>Unity Loading Failed</h3>
+            <p><strong>Error:</strong> ${message}</p>
+            <p><strong>Possible causes:</strong></p>
+            <ul style="text-align: left; margin: 10px 0;">
+              <li>Browser doesn't support WebAssembly</li>
+              <li>Insufficient memory</li>
+              <li>Corrupted build files</li>
+              <li>Network issues</li>
+            </ul>
+            <p>Please check browser console for detailed error logs.</p>
+            <button onclick="location.reload()" style="margin-top: 10px; padding: 8px 16px; background: white; color: red; border: none; border-radius: 4px; cursor: pointer;">Reload Page</button>
+          `;
+          container.appendChild(errorDiv);
+              });
+            };
+
+      document.body.appendChild(script);
+
+      // Test function for phoneme sequence - Exposed globally for debugging
+      window.testPhonemeSequence = function() {
+        if (!window.unityInstance) {
+          console.log("[Unity] ❌ Unity instance not ready yet");
+          alert("Unity not ready yet!");
+          return;
+        }
+
+        console.log("[Unity] 🧪 ==================== MANUAL TEST ====================");
+        const testData = {
+          phonemes: [
+            { time: 0, blendshape: "Ah", weight: 1.0 },
+            { time: 200, blendshape: "EE", weight: 1.0 },
+            { time: 400, blendshape: "Oh", weight: 1.0 },
+            { time: 600, blendshape: "W_OO", weight: 1.0 },
+            { time: 800, blendshape: "sil", weight: 1.0 }
+          ]
+        };
+        const testJson = JSON.stringify(testData);
+        console.log("[Unity] 🎭 Test data:", testJson);
+        
+        try {
+          window.unityInstance.SendMessage('AvatarController', 'PlayPhonemeSequence', testJson);
+          console.log("[Unity] ✅ Test sent successfully to AvatarController.PlayPhonemeSequence()");
+          alert("Test phoneme sequence sent! Check console for details.");
+        } catch (error) {
+          console.error("[Unity] ❌ Error calling Unity method:", error);
+          alert("Error: " + error.message + "\nCheck console for details.");
+        }
+      }
+
+    </script>
+  </body>
+</html>
