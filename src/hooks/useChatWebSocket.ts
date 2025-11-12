@@ -61,6 +61,7 @@ export function useChatWebSocket(
   const reconnectAttemptsRef = useRef(0);
   const maxReconnectAttempts = 3;
   const shouldReconnectRef = useRef(true);
+  const connectFnRef = useRef<((targetChatId?: string | null) => Promise<void>) | null>(null);
 
   // Auto-connect effect - will be added after connect function is defined
 
@@ -84,7 +85,6 @@ export function useChatWebSocket(
       const title = `Chat with Document ${dateStr}`;
       
       const response = await chatService.createChat({
-        user_id: userId,
         document_id: documentId || null,
         title: title,
         status: "pending"  // Status should be "pending" initially
@@ -96,6 +96,18 @@ export function useChatWebSocket(
         hasAttemptedConnect.current = null; // Reset to allow connection
         shouldReconnectRef.current = true; // Ensure reconnection is enabled
         setCurrentChatId(newChatId); // This will trigger auto-connect useEffect
+        
+        // Immediately connect WebSocket after chat creation
+        console.log('[Chat] 🆕 Chat created, connecting WebSocket to:', newChatId);
+        setTimeout(() => {
+          // Ensure we connect to the newly created chat
+          hasAttemptedConnect.current = newChatId;
+          // Use ref to call connect function to avoid circular dependency
+          if (connectFnRef.current) {
+            connectFnRef.current(newChatId);
+          }
+        }, 100);
+        
         if (onChatCreated) {
           onChatCreated(newChatId);
         }
@@ -110,7 +122,7 @@ export function useChatWebSocket(
     } finally {
       setIsCreatingChat(false);
     }
-  }, [userId, documentId, currentChatId, isCreatingChat]);
+  }, [documentId, currentChatId, isCreatingChat]);
 
   const loadChatMessages = useCallback(async (chatId: string) => {
     try {
@@ -148,7 +160,8 @@ export function useChatWebSocket(
               token: msg.token,
               type: msg.type,
               reaction: msg.reaction,
-              is_edited: msg.is_edited
+              is_edited: msg.is_edited,
+              citation_source: msg.citation || undefined  // ✅ Include citation from backend
             } as Record<string, unknown>
           }));
           
@@ -322,6 +335,11 @@ export function useChatWebSocket(
       setIsMockMode(true);
     }
   }, [currentChatId, isMockMode, connectionStatus, createNewChat]);
+
+  // Store connect function in ref so createNewChat can use it
+  useEffect(() => {
+    connectFnRef.current = connect;
+  }, [connect]);
 
   const disconnect = useCallback(() => {
     shouldReconnectRef.current = false;

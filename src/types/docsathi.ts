@@ -28,6 +28,7 @@ export interface UploadDocumentRequest {
   };
   WebsiteUrl?: string;
   YoutubeUrl?: string;
+  Url?: string;  // ✅ Single URL field - backend will auto-detect type
   documentFormat?: string;
 }
 

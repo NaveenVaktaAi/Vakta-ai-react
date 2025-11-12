@@ -9,6 +9,7 @@ import Profile from './pages/Profile';
 import DocSathi from './pages/DocSathi';
 import DocSathiChat from './pages/DocSathiChat';
 import AiTutor from './pages/AiTutor';
+import ExamConversations from './pages/ExamConversations';
 import Settings from './pages/Settings';
 import QuizPage from './pages/QuizPage';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -87,6 +88,16 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <AiTutor />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/exam-conversations/:examType"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <ExamConversations />
                 </Layout>
               </ProtectedRoute>
             }

@@ -11,7 +11,6 @@ export interface ChatMessage {
 export const chatService = {
   // Create a new chat
   createChat: async (data: {
-    user_id: number;
     document_id: string | null;
     title: string;
     status: string; // Changed from is_active boolean to status string

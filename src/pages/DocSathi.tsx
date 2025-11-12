@@ -1,49 +1,83 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, FileText, Link as LinkIcon, Youtube, Plus, CheckCircle, Clock, AlertCircle } from 'lucide-react';
+import { Upload, FileText, Link as LinkIcon, Plus, CheckCircle, Clock, AlertCircle } from 'lucide-react';
 import { docSathiService } from '../services/docsathiService';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'react-toastify';
 import type { DocumentStatus } from '../types/docsathi';
 import helperInstance from '../helpers/helper';
+import SimpleTrainingModal from '../components/SimpleTrainingModal';
 
 const DocSathi = () => {
   const navigate = useNavigate();
-  const [uploadType, setUploadType] = useState<'document' | 'website' | 'youtube'>('document');
+  const { user } = useAuth();
+  const [uploadType, setUploadType] = useState<'document' | 'url'>('document');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [websiteUrl, setWebsiteUrl] = useState('');
-  const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [url, setUrl] = useState('');
   const [documentFormat, setDocumentFormat] = useState('pdf');
   const [uploading, setUploading] = useState(false);
   const [documents, setDocuments] = useState<DocumentStatus[]>([]);
   const [pollingDocuments, setPollingDocuments] = useState<Set<string>>(new Set());
+  const [isDragging, setIsDragging] = useState(false);
+  const [showTrainingModal, setShowTrainingModal] = useState(false);
+  const [currentTrainingDoc, setCurrentTrainingDoc] = useState<{ id: string; name: string; status: 'processing' | 'completed' | 'failed' } | null>(null);
+  const currentTrainingDocRef = useRef<{ id: string; name: string; status: 'processing' | 'completed' | 'failed' } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dropZoneRef = useRef<HTMLDivElement>(null);
 
-  // Load documents on mount
+  // Sync ref with state
   useEffect(() => {
-    loadDocuments();
-  }, []);
+    currentTrainingDocRef.current = currentTrainingDoc;
+  }, [currentTrainingDoc]);
+
+  // Load documents on mount and when user is available
+  useEffect(() => {
+    if (user?._id) {
+      console.log('[DocSathi] Loading documents for user:', user._id);
+      loadDocuments();
+    } else {
+      console.log('[DocSathi] User not available yet, waiting...');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?._id]);
+
+  // Watch for status change to 'completed' and close modal
+  useEffect(() => {
+    if (currentTrainingDoc && currentTrainingDoc.status === 'completed' && showTrainingModal) {
+      console.log('[DocSathi] 🎯 Status is COMPLETED - Closing modal in 2 seconds');
+      const timer = setTimeout(() => {
+        console.log('[DocSathi] 🚪 Closing modal from parent component');
+        setShowTrainingModal(false);
+        setCurrentTrainingDoc(null);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [currentTrainingDoc?.status, showTrainingModal]);
 
   const loadDocuments = async () => {
-    // Using hardcoded user_id = 1 for now since backend expects integer
-    const userId = '1'; // TODO: Get actual user_id from JWT or user object
+    const userId = user?._id || '1';
+    console.log('[DocSathi] loadDocuments called with userId:', userId);
     
     try {
-      console.log('Loading documents for user:', userId);
+      console.log('[DocSathi] Calling getUploadedDocuments API...');
+      // Pass any value - backend will use authenticated user's ID from token
       const response = await docSathiService.getUploadedDocuments(userId);
-      console.log('Documents loaded:', response);
+      console.log('[DocSathi] API response:', response);
       
       if (response.success && response.data) {
+        console.log('[DocSathi] Documents loaded:', response.data.length);
         setDocuments(response.data);
-        // Start polling for any processing documents
         response.data.forEach(doc => {
           if (doc.status === 'processing') {
             startPolling(doc._id);
           }
         });
+      } else {
+        console.log('[DocSathi] API call failed:', response.message);
+        toast.error(response.message || 'Failed to load documents');
       }
     } catch (error) {
-      console.error('Error loading documents:', error);
+      console.error('[DocSathi] Error loading documents:', error);
       toast.error('Failed to load documents');
     }
   };
@@ -56,12 +90,46 @@ const DocSathi = () => {
     docSathiService.pollDocumentStatus(
       documentId,
       (status) => {
-        // Update the document in the list
+        console.log('[DocSathi] 📡 Polling update received:', status.status);
         setDocuments(prevDocs =>
           prevDocs.map(doc => doc._id === documentId ? status : doc)
         );
+        
+        // Update modal status IMMEDIATELY when status changes - THIS IS KEY!
+        // Use ref to avoid closure issues
+        const currentDoc = currentTrainingDocRef.current;
+        if (currentDoc && currentDoc.id === documentId) {
+          console.log('[DocSathi] 🔄 Polling callback - API status:', status.status);
+          console.log('[DocSathi] 🔄 Current modal status before update:', currentDoc.status);
+          
+          // CRITICAL: Always update, especially when status becomes 'completed'
+          setCurrentTrainingDoc(prev => {
+            if (prev && prev.id === documentId) {
+              console.log('[DocSathi] ⚡ UPDATING STATUS:', prev.status, '→', status.status);
+              const newStatus = {
+                id: documentId,
+                name: status.name || prev.name,
+                status: status.status as 'processing' | 'completed' | 'failed'
+              };
+              console.log('[DocSathi] ✅ New status object:', newStatus);
+              return newStatus;
+            }
+            console.log('[DocSathi] ⚠️ No prev state found');
+            return prev;
+          });
+          
+          // Extra check for completed status
+          if (status.status === 'completed') {
+            console.log('[DocSathi] 🎉🎉🎉 STATUS IS COMPLETED IN CALLBACK!');
+          }
+        } else {
+          console.log('[DocSathi] ⚠️ No currentTrainingDoc or ID mismatch. CurrentDoc:', currentDoc, 'DocumentId:', documentId);
+        }
       }
     ).then((finalStatus) => {
+      console.log('[DocSathi] 🎯 Polling completed, final status:', finalStatus.status);
+      console.log('[DocSathi] 📋 Final status object:', finalStatus);
+      
       setPollingDocuments(prev => {
         const newSet = new Set(prev);
         newSet.delete(documentId);
@@ -71,6 +139,21 @@ const DocSathi = () => {
       setDocuments(prevDocs =>
         prevDocs.map(doc => doc._id === documentId ? finalStatus : doc)
       );
+      
+      // Final update - ensure modal status is set to completed
+      // Use ref to avoid closure issues
+      const currentDoc = currentTrainingDocRef.current;
+      if (currentDoc && currentDoc.id === documentId) {
+        console.log('[DocSathi] ✅✅✅ FINAL UPDATE - Setting modal status to:', finalStatus.status);
+        setCurrentTrainingDoc({
+          id: documentId,
+          name: finalStatus.name || currentDoc.name,
+          status: finalStatus.status as 'processing' | 'completed' | 'failed'
+        });
+        console.log('[DocSathi] ✅ Modal status updated in .then()');
+      } else {
+        console.log('[DocSathi] ⚠️ No currentTrainingDoc in .then(). CurrentDoc:', currentDoc, 'DocumentId:', documentId);
+      }
       
       if (finalStatus.status === 'completed') {
         toast.success(`Document "${finalStatus.name}" is ready!`);
@@ -84,15 +167,30 @@ const DocSathi = () => {
         newSet.delete(documentId);
         return newSet;
       });
+      
+      // Update modal to failed status
+      if (currentTrainingDoc && currentTrainingDoc.id === documentId) {
+        setCurrentTrainingDoc(prev => prev ? { ...prev, status: 'failed' } : null);
+      }
     });
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleFileChange = (file: File) => {
     if (file) {
-      setSelectedFile(file);
-      // Determine format from file extension
+      // Validate file type
       const ext = file.name.split('.').pop()?.toLowerCase();
+      if (!['pdf', 'doc', 'docx'].includes(ext || '')) {
+        toast.error('Please upload PDF, DOC, or DOCX files only');
+        return;
+      }
+      
+      // Validate file size (15MB)
+      if (file.size > 15 * 1024 * 1024) {
+        toast.error('File size must be less than 15MB');
+        return;
+      }
+      
+      setSelectedFile(file);
       if (ext === 'pdf') {
         setDocumentFormat('pdf');
       } else if (['doc', 'docx'].includes(ext || '')) {
@@ -100,6 +198,46 @@ const DocSathi = () => {
       }
     }
   };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleFileChange(file);
+    }
+  };
+
+  // Drag and drop handlers
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (uploadType === 'document') {
+      setIsDragging(true);
+    }
+  }, [uploadType]);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (uploadType === 'document') {
+      const files = e.dataTransfer.files;
+      if (files && files.length > 0) {
+        handleFileChange(files[0]);
+      }
+    }
+  }, [uploadType]);
 
   const uploadFile = async () => {
     if (!selectedFile) {
@@ -109,7 +247,6 @@ const DocSathi = () => {
 
     setUploading(true);
     try {
-      // 1. Upload file to S3 using helper
       const uploadResults = await helperInstance.uploadFileOnS3(selectedFile);
       
       if (!uploadResults || uploadResults.length === 0) {
@@ -118,7 +255,6 @@ const DocSathi = () => {
 
       const uploadedFile = uploadResults[0];
 
-      // 2. Send document metadata to backend
       const documentResponse = await docSathiService.uploadDocument({
         FileData: {
           signedUrl: uploadedFile.signedUrl,
@@ -128,35 +264,38 @@ const DocSathi = () => {
       });
 
       if (documentResponse.success && documentResponse.data) {
-        // Backend returns { success, results, message }
         const results = documentResponse.data?.results || documentResponse.data;
         
         if (Array.isArray(results) && results.length > 0) {
           const newDoc = results[0];
           const documentId = newDoc.documentId || newDoc._id;
           
-          // Create document object with processing status
           const document: DocumentStatus = {
             _id: documentId,
             name: selectedFile.name,
             url: uploadedFile.signedUrl,
             status: 'processing',
             document_format: documentFormat,
+            user_id: user?._id || '1',
             created_ts: new Date().toISOString(),
             updated_ts: new Date().toISOString(),
             summary: "Document is being processed..."
           };
           
-          // Add to documents list immediately
           setDocuments(prev => [document, ...prev]);
-          
           toast.success('Document uploaded successfully! Training in progress...');
           
-          // Start polling
+          // Open training modal
+          setCurrentTrainingDoc({
+            id: documentId,
+            name: selectedFile.name,
+            status: 'processing'
+          });
+          setShowTrainingModal(true);
+          
           startPolling(documentId);
         }
         
-        // Reset form
         setSelectedFile(null);
         if (fileInputRef.current) {
           fileInputRef.current.value = '';
@@ -172,16 +311,24 @@ const DocSathi = () => {
     }
   };
 
-  const uploadWebsite = async () => {
-    if (!websiteUrl.trim()) {
-      toast.error('Please enter a website URL');
+  const uploadUrl = async () => {
+    if (!url.trim()) {
+      toast.error('Please enter a URL');
+      return;
+    }
+
+    // Basic URL validation
+    try {
+      new URL(url.trim());
+    } catch {
+      toast.error('Please enter a valid URL');
       return;
     }
 
     setUploading(true);
     try {
       const response = await docSathiService.uploadDocument({
-        WebsiteUrl: websiteUrl
+        Url: url.trim()  // ✅ Single URL field - backend will auto-detect YouTube vs Web
       });
 
       if (response.success && response.data) {
@@ -193,76 +340,36 @@ const DocSathi = () => {
           
           const document: DocumentStatus = {
             _id: documentId,
-            name: websiteUrl,
-            url: websiteUrl,
+            name: url.trim(),
+            url: url.trim(),
             status: 'processing',
-            document_format: 'website',
+            document_format: url.includes('youtube.com') || url.includes('youtu.be') ? 'youtube' : 'website',
+            user_id: user?._id || '1',
             created_ts: new Date().toISOString(),
             updated_ts: new Date().toISOString(),
-            summary: "Website is being processed..."
+            summary: "URL is being processed..."
           };
           
           setDocuments(prev => [document, ...prev]);
-          toast.success('Website URL added successfully! Processing in progress...');
-          setWebsiteUrl('');
+          toast.success('URL added successfully! Processing in progress...');
+          setUrl('');
           
-          // Start polling
+          // Open training modal
+          setCurrentTrainingDoc({
+            id: documentId,
+            name: url.trim(),
+            status: 'processing'
+          });
+          setShowTrainingModal(true);
+          
           startPolling(documentId);
         }
       } else {
-        throw new Error(response.message || 'Failed to add website URL');
+        throw new Error(response.message || 'Failed to add URL');
       }
     } catch (error) {
       console.error('Upload error:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to add website URL');
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const uploadYoutube = async () => {
-    if (!youtubeUrl.trim()) {
-      toast.error('Please enter a YouTube URL');
-      return;
-    }
-
-    setUploading(true);
-    try {
-      const response = await docSathiService.uploadDocument({
-        YoutubeUrl: youtubeUrl
-      });
-
-      if (response.success && response.data) {
-        const results = response.data?.results || response.data;
-        
-        if (Array.isArray(results) && results.length > 0) {
-          const newDoc = results[0];
-          const documentId = newDoc.documentId || newDoc._id;
-          
-          const document: DocumentStatus = {
-            _id: documentId,
-            name: youtubeUrl,
-            url: youtubeUrl,
-            status: 'processing',
-            document_format: 'youtube',
-            created_ts: new Date().toISOString(),
-            updated_ts: new Date().toISOString(),
-            summary: "YouTube video is being processed..."
-          };
-          
-          setDocuments(prev => [document, ...prev]);
-          toast.success('YouTube URL added successfully! Processing in progress...');
-          setYoutubeUrl('');
-          
-          // Start polling
-          startPolling(documentId);
-        }
-      } else {
-        throw new Error(response.message || 'Failed to add YouTube URL');
-      }
-    } catch (error) {
-      console.error('Upload error:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to add YouTube URL');
+      toast.error(error instanceof Error ? error.message : 'Failed to add URL');
     } finally {
       setUploading(false);
     }
@@ -271,10 +378,8 @@ const DocSathi = () => {
   const handleUpload = () => {
     if (uploadType === 'document') {
       uploadFile();
-    } else if (uploadType === 'website') {
-      uploadWebsite();
-    } else if (uploadType === 'youtube') {
-      uploadYoutube();
+    } else if (uploadType === 'url') {
+      uploadUrl();
     }
   };
 
@@ -305,93 +410,153 @@ const DocSathi = () => {
   };
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
-        <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 mb-6 sm:mb-8">Your Documents</h1>
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+            Your Documents
+          </h1>
+          <p className="text-gray-600 text-sm sm:text-base">
+            Upload documents, websites, or YouTube videos to start chatting with AI
+          </p>
+        </div>
 
         {/* Upload Section */}
-        <div className="bg-white rounded-xl sm:rounded-2xl shadow-lg p-4 sm:p-6 mb-6 sm:mb-8 border-2 border-dashed border-blue-300">
-          <div className="mb-6">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <FileText className="w-5 h-5 text-blue-600" />
-              </div>
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <FileText className="w-5 h-5 text-blue-600" />
-              </div>
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <FileText className="w-5 h-5 text-blue-600" />
-              </div>
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <Youtube className="w-5 h-5 text-blue-600" />
-              </div>
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <LinkIcon className="w-5 h-5 text-blue-600" />
-              </div>
-            </div>
-            <p className="text-gray-600 text-center">Drag & Drop files or click to browse</p>
-          </div>
-
-          {/* Upload Type Selection */}
-          <div className="flex gap-2 sm:gap-4 mb-4">
+        <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 mb-8 border border-gray-200">
+          {/* Upload Type Tabs */}
+          <div className="flex gap-3 mb-6 bg-gray-100 p-1 rounded-xl">
             <button
-              onClick={() => setUploadType('document')}
-              className={`flex-1 px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg sm:rounded-xl font-semibold transition-all text-sm sm:text-base ${
+              onClick={() => {
+                setUploadType('document');
+                setSelectedFile(null);
+                setUrl('');
+              }}
+              className={`flex-1 px-4 py-3 rounded-lg font-semibold transition-all ${
                 uploadType === 'document'
-                  ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  ? 'bg-white text-blue-600 shadow-md'
+                  : 'text-gray-600 hover:text-gray-900'
               }`}
             >
-              📄 Browse Files
+              <div className="flex items-center justify-center gap-2">
+                <FileText className="w-5 h-5" />
+                <span>Upload File</span>
+              </div>
             </button>
             <button
-              onClick={() => setUploadType('website')}
-              className={`flex-1 px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg sm:rounded-xl font-semibold transition-all text-sm sm:text-base ${
-                uploadType === 'website'
-                  ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              onClick={() => {
+                setUploadType('url');
+                setSelectedFile(null);
+              }}
+              className={`flex-1 px-4 py-3 rounded-lg font-semibold transition-all ${
+                uploadType === 'url'
+                  ? 'bg-white text-blue-600 shadow-md'
+                  : 'text-gray-600 hover:text-gray-900'
               }`}
             >
-              🔗 Add URL
+              <div className="flex items-center justify-center gap-2">
+                <LinkIcon className="w-5 h-5" />
+                <span>Add URL</span>
+              </div>
             </button>
           </div>
 
-          {/* Document Upload */}
+          {/* Document Upload with Drag & Drop */}
           {uploadType === 'document' && (
             <div className="space-y-4">
               <input
                 type="file"
                 ref={fileInputRef}
-                onChange={handleFileChange}
+                onChange={handleFileInputChange}
                 accept=".pdf,.doc,.docx"
                 className="hidden"
                 id="file-upload"
               />
-              <label
-                htmlFor="file-upload"
-                className="block w-full p-4 bg-gray-50 rounded-xl border-2 border-dashed border-gray-300 hover:border-blue-400 cursor-pointer transition-colors"
+              <div
+                ref={dropZoneRef}
+                onDragEnter={handleDragEnter}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`
+                  relative w-full p-12 rounded-xl border-2 border-dashed transition-all cursor-pointer
+                  ${isDragging 
+                    ? 'border-blue-500 bg-blue-50 scale-[1.02]' 
+                    : selectedFile 
+                      ? 'border-green-400 bg-green-50' 
+                      : 'border-gray-300 bg-gray-50 hover:border-blue-400 hover:bg-blue-50'
+                  }
+                `}
               >
-                <div className="text-center">
-                  <Upload className="w-10 h-10 mx-auto mb-2 text-gray-400" />
-                  <p className="text-sm text-gray-600">
-                    {selectedFile ? selectedFile.name : 'Click to upload or drag and drop'}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">PDF, DOC, DOCX (Max 15MB)</p>
-                </div>
-              </label>
+                {selectedFile ? (
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
+                      <CheckCircle className="w-8 h-8 text-green-600" />
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm font-semibold text-gray-900">{selectedFile.name}</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                      </p>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedFile(null);
+                        if (fileInputRef.current) {
+                          fileInputRef.current.value = '';
+                        }
+                      }}
+                      className="mt-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-4">
+                    <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-colors ${
+                      isDragging ? 'bg-blue-100' : 'bg-gray-100'
+                    }`}>
+                      <Upload className={`w-10 h-10 ${isDragging ? 'text-blue-600' : 'text-gray-400'}`} />
+                    </div>
+                    <div className="text-center">
+                      <p className="text-base font-semibold text-gray-900 mb-1">
+                        {isDragging ? 'Drop your file here' : 'Drag & drop your file here'}
+                      </p>
+                      <p className="text-sm text-gray-500">
+                        or <span className="text-blue-600 font-medium">click to browse</span>
+                      </p>
+                      <p className="text-xs text-gray-400 mt-2">
+                        Supports PDF, DOC, DOCX (Max 15MB)
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
-          {/* Website URL Upload */}
-          {uploadType === 'website' && (
+          {/* URL Input */}
+          {uploadType === 'url' && (
             <div className="space-y-4">
-              <input
-                type="url"
-                value={websiteUrl}
-                onChange={(e) => setWebsiteUrl(e.target.value)}
-                placeholder="https://example.com"
-                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
-              />
+              <div className="relative">
+                <LinkIcon className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input
+                  type="url"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="Enter website URL or YouTube video URL..."
+                  className="w-full pl-12 pr-4 py-4 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 text-base transition-all"
+                />
+              </div>
+              <div className="flex items-start gap-2 text-sm text-gray-600 bg-blue-50 p-3 rounded-lg">
+                <div className="w-5 h-5 text-blue-600 mt-0.5">💡</div>
+                <div>
+                  <p className="font-medium text-gray-900 mb-1">Smart URL Detection</p>
+                  <p>We automatically detect if it's a website or YouTube video. Just paste any URL!</p>
+                </div>
+              </div>
             </div>
           )}
 
@@ -400,78 +565,100 @@ const DocSathi = () => {
             onClick={handleUpload}
             disabled={uploading || 
               (uploadType === 'document' && !selectedFile) ||
-              (uploadType === 'website' && !websiteUrl.trim())
+              (uploadType === 'url' && !url.trim())
             }
-            className="w-full mt-4 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl font-semibold hover:from-blue-700 hover:to-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-xl"
+            className="w-full mt-6 px-6 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl font-semibold hover:from-blue-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-xl text-base flex items-center justify-center gap-2"
           >
             {uploading ? (
-              <span className="flex items-center justify-center gap-2">
+              <>
                 <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                {uploadType === 'document' ? 'Uploading...' : 'Processing...'}
-              </span>
+                <span>{uploadType === 'document' ? 'Uploading...' : 'Processing...'}</span>
+              </>
             ) : (
-              <span className="flex items-center justify-center gap-2">
+              <>
                 <Plus className="w-5 h-5" />
-                {uploadType === 'document' ? 'Upload Document' : 'Add URL'}
-              </span>
+                <span>{uploadType === 'document' ? 'Upload Document' : 'Add URL'}</span>
+              </>
             )}
           </button>
         </div>
 
         {/* Documents List */}
         <div className="space-y-4">
+          {documents.length > 0 && (
+            <h2 className="text-xl font-semibold text-gray-900 mb-4">Recent Documents</h2>
+          )}
+          
           {documents.map((doc) => (
             <div
               key={doc._id}
-              className="bg-white rounded-xl shadow-md p-4 sm:p-6 border border-gray-200 hover:shadow-lg transition-shadow"
+              className="bg-white rounded-xl shadow-md p-5 sm:p-6 border border-gray-200 hover:shadow-lg transition-all"
             >
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div className="flex items-start sm:items-center gap-3 sm:gap-4 flex-1 min-w-0">
+                <div className="flex items-start sm:items-center gap-4 flex-1 min-w-0">
                   <div className="flex-shrink-0 mt-1">
                     {getStatusIcon(doc.status)}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate">{doc.name}</h3>
-                    <div className="flex flex-wrap items-center gap-2 mt-1">
-                      <span className={`px-2 sm:px-3 py-1 rounded-full text-xs font-medium border ${getStatusBadgeColor(doc.status)}`}>
+                    <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate mb-2">{doc.name}</h3>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`px-3 py-1 rounded-full text-xs font-medium border ${getStatusBadgeColor(doc.status)}`}>
                         {doc.status === 'processing' && pollingDocuments.has(doc._id) ? 'Processing' : 
                          doc.status === 'completed' ? 'Completed' : 
                          doc.status === 'failed' ? 'Failed' : doc.status}
                       </span>
-                      <span className="text-xs text-gray-500">
+                      <span className="text-xs text-gray-500 px-2 py-1 bg-gray-100 rounded">
                         {doc.document_format || doc.type}
                       </span>
                     </div>
                   </div>
                 </div>
                 
-                {/* Show button for completed or pending, but disable if pending */}
-                {(doc.status === 'completed' || doc.status === 'pending') && (
+                {doc.status === 'completed' && (
                   <button
-                    onClick={() => doc.status === 'completed' && navigate(`/docsathi/chat/${doc._id}`)}
-                    disabled={doc.status === 'pending'}
-                    className={`w-full sm:w-auto px-4 sm:px-6 py-2 rounded-lg text-sm sm:text-base font-semibold transition-all shadow-lg flex-shrink-0 ${
-                      doc.status === 'completed'
-                        ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-700 hover:to-blue-800 hover:shadow-xl cursor-pointer'
-                        : 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-60'
-                    }`}
+                    onClick={() => navigate(`/docsathi/chat/${doc._id}`)}
+                    className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg font-semibold transition-all shadow-lg hover:shadow-xl hover:from-blue-700 hover:to-blue-800 flex-shrink-0"
                   >
-                    {doc.status === 'completed' ? 'Start Chat' : 'Processing...'}
+                    Start Chat
                   </button>
+                )}
+                
+                {doc.status === 'processing' && (
+                  <div className="w-full sm:w-auto px-6 py-3 bg-gray-100 text-gray-600 rounded-lg font-semibold flex items-center justify-center gap-2 flex-shrink-0">
+                    <Clock className="w-4 h-4 animate-pulse" />
+                    <span>Processing...</span>
+                  </div>
                 )}
               </div>
             </div>
           ))}
 
           {documents.length === 0 && (
-            <div className="text-center py-16 bg-gray-50 rounded-xl border-2 border-dashed border-gray-300">
-              <FileText className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-              <p className="text-gray-600 text-lg">No documents uploaded yet</p>
+            <div className="text-center py-20 bg-white rounded-xl border-2 border-dashed border-gray-300">
+              <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <FileText className="w-10 h-10 text-gray-400" />
+              </div>
+              <p className="text-gray-600 text-lg font-medium mb-2">No documents uploaded yet</p>
               <p className="text-gray-500 text-sm">Upload your first document to get started</p>
             </div>
           )}
         </div>
       </div>
+
+      {/* Simple Training Modal */}
+      {showTrainingModal && currentTrainingDoc && (
+        <SimpleTrainingModal
+          key={`${currentTrainingDoc.id}-${currentTrainingDoc.status}`} // Force re-render when status changes
+          isOpen={showTrainingModal}
+          onClose={() => {
+            console.log('[DocSathi] 🚪 Closing modal');
+            setShowTrainingModal(false);
+            setCurrentTrainingDoc(null);
+          }}
+          documentName={currentTrainingDoc.name}
+          status={currentTrainingDoc.status}
+        />
+      )}
     </div>
   );
 };

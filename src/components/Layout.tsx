@@ -1,14 +1,12 @@
 import { ReactNode, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, 
-  User, 
   BookOpen, 
   Bot, 
   Settings, 
   LogOut,
   GraduationCap,
-  Brain,
   Menu,
   X
 } from 'lucide-react';
@@ -20,12 +18,12 @@ interface LayoutProps {
 
 const Layout = ({ children }: LayoutProps) => {
   const location = useLocation();
+  const navigate = useNavigate();
   const { logout, user } = useAuth();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const menuItems = [
     { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
-    { icon: User, label: 'Profile', path: '/profile' },
     { icon: BookOpen, label: 'DocSathi', path: '/docsathi' },
     { icon: Bot, label: 'AI Tutor', path: '/ai-tutor' },
     { icon: Settings, label: 'Settings', path: '/settings' },
@@ -49,14 +47,12 @@ const Layout = ({ children }: LayoutProps) => {
             >
               {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
             </button>
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-purple-500 rounded-lg flex items-center justify-center">
-                <Brain className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-base font-bold text-white">Vakta AI</h1>
-                <p className="text-xs text-blue-200">Learning Platform</p>
-              </div>
+            <div className="flex items-center cursor-pointer" onClick={() => navigate('/dashboard')}>
+              <img 
+                src="/Vakta.png" 
+                alt="Vakta AI" 
+                className="h-16 w-auto object-contain transition-all hover:opacity-80"
+              />
             </div>
           </div>
           <div className="w-8 h-8 bg-gradient-to-br from-purple-400 to-pink-500 rounded-full flex items-center justify-center">
@@ -99,8 +95,36 @@ const Layout = ({ children }: LayoutProps) => {
               })}
             </nav>
 
-            {/* Logout Button */}
+            {/* User Info at Bottom - Mobile */}
             <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-blue-700">
+              {/* User Section - Clickable to open profile */}
+              {user && (
+                <div 
+                  onClick={() => {
+                    navigate('/profile');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="mb-4 p-3 bg-blue-800/50 rounded-lg cursor-pointer hover:bg-blue-700/50 transition-all duration-200"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gradient-to-br from-purple-400 to-pink-500 rounded-full flex items-center justify-center">
+                      <span className="text-white font-semibold text-sm">
+                        {user.full_name?.charAt(0).toUpperCase() || 'U'}
+                      </span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-white truncate">
+                        {user.full_name}
+                      </p>
+                      <p className="text-xs text-blue-200 truncate capitalize">
+                        {user.role}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Logout Button */}
               <button
                 onClick={handleLogout}
                 className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white transition-all duration-200 shadow-lg hover:shadow-xl"
@@ -116,15 +140,13 @@ const Layout = ({ children }: LayoutProps) => {
       {/* Desktop Sidebar */}
       <aside className="hidden lg:block fixed left-0 top-0 h-screen w-64 bg-gradient-to-b from-blue-900 via-blue-800 to-blue-900 text-white shadow-2xl">
         {/* Logo */}
-        <div className="p-6 border-b border-blue-700">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-purple-500 rounded-xl flex items-center justify-center shadow-lg">
-              <Brain className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-white">Vakta AI</h1>
-              <p className="text-xs text-blue-200">Learning Platform</p>
-            </div>
+        <div className="py-3 px-4 border-b border-blue-700">
+          <div className="flex items-center justify-center cursor-pointer hover:opacity-90 transition-opacity" onClick={() => navigate('/dashboard')}>
+            <img 
+              src="/Vakta.png" 
+              alt="Vakta AI" 
+              className="h-28 w-auto object-contain transition-all hover:opacity-80"
+            />
           </div>
         </div>
 
@@ -153,9 +175,12 @@ const Layout = ({ children }: LayoutProps) => {
 
         {/* User Info at Bottom */}
         <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-blue-700">
-          {/* User Section */}
+          {/* User Section - Clickable to open profile */}
           {user && (
-            <div className="mb-4 p-3 bg-blue-800/50 rounded-lg">
+            <div 
+              onClick={() => navigate('/profile')}
+              className="mb-4 p-3 bg-blue-800/50 rounded-lg cursor-pointer hover:bg-blue-700/50 transition-all duration-200"
+            >
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-gradient-to-br from-purple-400 to-pink-500 rounded-full flex items-center justify-center">
                   <span className="text-white font-semibold text-sm">

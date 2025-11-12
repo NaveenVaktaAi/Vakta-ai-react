@@ -29,11 +29,38 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
   const [showAllQuizzes, setShowAllQuizzes] = useState(false);
   const [existingQuizzes, setExistingQuizzes] = useState<ExistingQuiz[]>([]);
   const [loadingQuizzes, setLoadingQuizzes] = useState(false);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [aiNotes, setAiNotes] = useState<{ title: string; notes: string[] } | null>(null);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [showNotesModal, setShowNotesModal] = useState(false);
+  const [loadingDocument, setLoadingDocument] = useState(false);
 
-  // Load existing quizzes when component mounts
+  // Load document data and existing quizzes when component mounts
   useEffect(() => {
+    loadDocumentData();
     loadExistingQuizzes();
   }, [documentId]);
+
+  const loadDocumentData = async () => {
+    setLoadingDocument(true);
+    try {
+      const response = await documentService.getDocumentText(documentId);
+      if (response.success && response.data) {
+        // Check if summary exists
+        if (response.data.summary) {
+          setSummary(response.data.summary);
+        }
+        // Check if ai_notes exists
+        if (response.data.ai_notes) {
+          setAiNotes(response.data.ai_notes);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading document data:', error);
+    } finally {
+      setLoadingDocument(false);
+    }
+  };
 
   const loadExistingQuizzes = async () => {
     setLoadingQuizzes(true);
@@ -50,6 +77,10 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
     }
   };
 
+  const handleViewSummary = () => {
+    setShowSummaryModal(true);
+  };
+
   const handleGenerateSummary = async () => {
     setIsGenerating(true);
     setGenerationType('summary');
@@ -60,8 +91,10 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
       
       if (response.success && response.data) {
         toast.success('Summary generated successfully!');
-        // TODO: Show summary in a modal or download as PDF
-        console.log('Summary data:', response.data);
+        // Reload document data to get updated summary
+        await loadDocumentData();
+        // Show summary modal
+        setShowSummaryModal(true);
       } else {
         throw new Error(response.message || 'Failed to generate summary');
       }
@@ -74,6 +107,10 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
     }
   };
 
+  const handleViewNotes = () => {
+    setShowNotesModal(true);
+  };
+
   const handleGenerateNotes = async () => {
     setIsGenerating(true);
     setGenerationType('notes');
@@ -84,8 +121,17 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
       
       if (response.success && response.data) {
         toast.success('Notes generated successfully!');
-        // TODO: Show notes in a modal or download as PDF
-        console.log('Notes data:', response.data);
+        // Update local state with new notes
+        if (response.data.notes && response.data.title) {
+          setAiNotes({
+            title: response.data.title,
+            notes: response.data.notes
+          });
+        }
+        // Reload document data to get updated ai_notes
+        await loadDocumentData();
+        // Show notes modal
+        setShowNotesModal(true);
       } else {
         throw new Error(response.message || 'Failed to generate notes');
       }
@@ -151,31 +197,53 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
         </div>
         
         <div className="space-y-2">
-          <button
-            onClick={handleGenerateSummary}
-            disabled={isGenerating}
-            className="w-full flex items-center gap-2 p-3 bg-gradient-to-r from-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 text-blue-700 border border-blue-200 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isGenerating && generationType === 'summary' ? (
-              <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-            ) : (
-              <PieChart className="w-4 h-4" />
-            )}
-            <span className="text-sm font-medium">Generate Summary</span>
-          </button>
+          {/* Summary Button - Show View if exists, Generate otherwise */}
+          {summary ? (
+            <button
+              onClick={handleViewSummary}
+              className="w-full flex items-center gap-2 p-3 bg-gradient-to-r from-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 text-blue-700 border border-blue-200 rounded-lg transition-all"
+            >
+              <Eye className="w-4 h-4" />
+              <span className="text-sm font-medium">View Summary</span>
+            </button>
+          ) : (
+            <button
+              onClick={handleGenerateSummary}
+              disabled={isGenerating || loadingDocument}
+              className="w-full flex items-center gap-2 p-3 bg-gradient-to-r from-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 text-blue-700 border border-blue-200 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isGenerating && generationType === 'summary' ? (
+                <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+              ) : (
+                <PieChart className="w-4 h-4" />
+              )}
+              <span className="text-sm font-medium">Generate Summary</span>
+            </button>
+          )}
           
-          <button
-            onClick={handleGenerateNotes}
-            disabled={isGenerating}
-            className="w-full flex items-center gap-2 p-3 bg-gradient-to-r from-green-50 to-green-100 hover:from-green-100 hover:to-green-200 text-green-700 border border-green-200 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isGenerating && generationType === 'notes' ? (
-              <div className="w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full animate-spin"></div>
-            ) : (
-              <Bookmark className="w-4 h-4" />
-            )}
-            <span className="text-sm font-medium">Generate Notes</span>
-          </button>
+          {/* Notes Button - Show View if exists, Generate otherwise */}
+          {aiNotes ? (
+            <button
+              onClick={handleViewNotes}
+              className="w-full flex items-center gap-2 p-3 bg-gradient-to-r from-green-50 to-green-100 hover:from-green-100 hover:to-green-200 text-green-700 border border-green-200 rounded-lg transition-all"
+            >
+              <Eye className="w-4 h-4" />
+              <span className="text-sm font-medium">View Notes</span>
+            </button>
+          ) : (
+            <button
+              onClick={handleGenerateNotes}
+              disabled={isGenerating || loadingDocument}
+              className="w-full flex items-center gap-2 p-3 bg-gradient-to-r from-green-50 to-green-100 hover:from-green-100 hover:to-green-200 text-green-700 border border-green-200 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isGenerating && generationType === 'notes' ? (
+                <div className="w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full animate-spin"></div>
+              ) : (
+                <Bookmark className="w-4 h-4" />
+              )}
+              <span className="text-sm font-medium">Generate Notes</span>
+            </button>
+          )}
           
           {/* Show View All Quizzes if quizzes exist, otherwise show Generate Quiz */}
           {existingQuizzes.length > 0 ? (
@@ -218,6 +286,54 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
         onQuizGenerated={handleQuizGenerated}
         onStartQuiz={handleStartQuiz}
       />
+
+      {/* Summary Modal */}
+      {showSummaryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-800">Document Summary</h3>
+              <button
+                onClick={() => setShowSummaryModal(false)}
+                className="p-1 hover:bg-gray-100 rounded transition-colors"
+              >
+                <X className="w-4 h-4 text-gray-600" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1">
+              <div className="prose prose-sm max-w-none">
+                <p className="text-gray-700 whitespace-pre-wrap">{summary}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Notes Modal */}
+      {showNotesModal && aiNotes && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-800">{aiNotes.title || 'Document Notes'}</h3>
+              <button
+                onClick={() => setShowNotesModal(false)}
+                className="p-1 hover:bg-gray-100 rounded transition-colors"
+              >
+                <X className="w-4 h-4 text-gray-600" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1">
+              <div className="space-y-3">
+                {aiNotes.notes.map((note, index) => (
+                  <div key={index} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <p className="text-gray-700 text-sm">{note}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* View All Quizzes Modal */}
       {showAllQuizzes && (

@@ -12,11 +12,23 @@ export interface DocumentChat {
   message_count?: number;
 }
 
+export interface TranscriptSegment {
+  start: number;
+  duration: number;
+  text: string;
+}
+
 export interface DocumentTextResponse {
-  summary: string;
+  summary?: string;
   type: string;
   document_url?: string;
   document_name?: string;
+  ai_notes?: {
+    title: string;
+    notes: string[];
+    generated_at?: string;
+  };
+  transcript_segments?: TranscriptSegment[]; // ✅ Timestamped transcript for YouTube videos
 }
 
 export interface DocumentSummary {

@@ -279,6 +279,7 @@ const DocSathiChat = () => {
   const [documentType, setDocumentType] = useState<string>('');
   const [documentUrl, setDocumentUrl] = useState<string>('');
   const [documentName, setDocumentName] = useState<string>('');
+  const [transcriptSegments, setTranscriptSegments] = useState<Array<{start: number; duration: number; text: string}> | null>(null); // ✅ Timestamped transcript
   const [loadingChats, setLoadingChats] = useState(false);
   const [loadingMoreChats, setLoadingMoreChats] = useState(false);
   const [loadingText, setLoadingText] = useState(false);
@@ -368,6 +369,12 @@ const DocSathiChat = () => {
         setDocumentType(response.data.type || '');
         setDocumentUrl((response.data as { document_url?: string })?.document_url || '');
         setDocumentName((response.data as { document_name?: string })?.document_name || '');
+        // ✅ Load timestamped transcript if available
+        if ((response.data as any).transcript_segments) {
+          setTranscriptSegments((response.data as any).transcript_segments);
+        } else {
+          setTranscriptSegments(null);
+        }
       }
     } catch (error) {
       console.error('Error loading document text:', error);
@@ -461,9 +468,10 @@ const DocSathiChat = () => {
      documentType.toLowerCase() === 'website')
   );
   
-  // Show content section (summary/keypoints) ONLY for videos and Web URLs
+  // ✅ Show transcript for YouTube videos, summary for other videos/web URLs
   // For PDFs, S3 documents (doc, docx, txt, etc.), show ONLY the preview, NO summary
   const showContentSection = isVideo || isWeb;
+  const showTranscript = isYouTube && transcriptSegments && transcriptSegments.length > 0; // ✅ Show transcript for YouTube
 
   const getPreviewContent = () => {
     if (isYouTube && documentUrl) {
@@ -692,12 +700,50 @@ const DocSathiChat = () => {
                 )}
               </div>
 
-              {/* Summary/Content Section - Only for Videos and Web URLs (NOT for PDFs or uploaded documents) */}
-              {showContentSection && documentText && (
+              {/* Transcript/Summary Section - Only for Videos and Web URLs (NOT for PDFs or uploaded documents) */}
+              {showContentSection && (showTranscript || documentText) && (
                 <div className="flex-1 p-4 overflow-y-auto">
-                  <h4 className="font-semibold text-gray-800 mb-3">Summary & Key Points</h4>
+                  <h4 className="font-semibold text-gray-800 mb-3">
+                    {showTranscript ? 'Transcript' : 'Summary & Key Points'}
+                  </h4>
                   <div className="bg-gray-50 rounded-lg border border-gray-200 p-4">
-                    <FormattedMessage content={documentText} />
+                    {showTranscript && transcriptSegments ? (
+                      // ✅ Show timestamped transcript for YouTube videos
+                      <div className="space-y-2 select-text">
+                        {transcriptSegments.map((segment, index) => {
+                          const minutes = Math.floor(segment.start / 60);
+                          const seconds = Math.floor(segment.start % 60);
+                          const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                          
+                          return (
+                            <div 
+                              key={index} 
+                              className="flex gap-3 hover:bg-white p-2 rounded transition-colors cursor-pointer group"
+                              onClick={() => {
+                                // Jump to video timestamp when clicked
+                                if (documentUrl) {
+                                  const videoId = documentUrl.includes('youtu.be') 
+                                    ? documentUrl.split('youtu.be/')[1]?.split('?')[0]
+                                    : documentUrl.split('v=')[1]?.split('&')[0];
+                                  if (videoId) {
+                                    window.open(`${documentUrl}&t=${Math.floor(segment.start)}s`, '_blank');
+                                  }
+                                }
+                              }}
+                            >
+                              <span className="text-xs font-mono text-blue-600 font-semibold flex-shrink-0 group-hover:text-blue-800">
+                                {timeString}
+                              </span>
+                              <span className="text-sm text-gray-800 flex-1 leading-relaxed">
+                                {segment.text}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <FormattedMessage content={documentText} />
+                    )}
                   </div>
                 </div>
               )}
@@ -754,7 +800,14 @@ const DocSathiChat = () => {
                 }}>
                   <div className="space-y-2">
                     {currentChatId && currentChatId !== 'temp-trigger' && !chatHistory.find(chat => (chat.chat_id || chat._id) === currentChatId) && (
-                      <div className="p-3 cursor-pointer transition-all duration-200 hover:shadow-md bg-blue-50 border-2 border-blue-200 shadow-sm rounded-lg">
+                      <div 
+                        className="p-3 cursor-pointer transition-all duration-200 hover:shadow-md bg-blue-50 border-2 border-blue-200 shadow-sm rounded-lg"
+                        onClick={() => {
+                          console.log('[ChatHistory] 🖱️ CLICKED on New Chat tab (mobile)');
+                          handleNewChat();
+                          setShowMobileSidebar(false);
+                        }}
+                      >
                         <div className="flex items-center justify-between">
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium text-gray-900 truncate">New Chat</p>
@@ -886,8 +939,14 @@ const DocSathiChat = () => {
               }
             }}>
               <div className="space-y-2">
-                {currentChatId && currentChatId !== 'temp-trigger' && !chatHistory.find(chat => chat._id === currentChatId) && (
-                  <div className="p-3 cursor-pointer transition-all duration-200 hover:shadow-md bg-blue-50 border-2 border-blue-200 shadow-sm rounded-lg">
+                {currentChatId && currentChatId !== 'temp-trigger' && !chatHistory.find(chat => (chat.chat_id || chat._id) === currentChatId) && (
+                  <div 
+                    className="p-3 cursor-pointer transition-all duration-200 hover:shadow-md bg-blue-50 border-2 border-blue-200 shadow-sm rounded-lg"
+                    onClick={() => {
+                      console.log('[ChatHistory] 🖱️ CLICKED on New Chat tab');
+                      handleNewChat();
+                    }}
+                  >
                     <div className="flex items-center justify-between">
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-900 truncate">
@@ -977,11 +1036,11 @@ const DocSathiChat = () => {
           </div>
         </div>
 
-        {/* Document Text - Only show for Videos and Web URLs (NOT for PDFs or uploaded documents) */}
+        {/* Document Text/Transcript - Only show for Videos and Web URLs (NOT for PDFs or uploaded documents) */}
         {showContentSection && (
           <div className="flex-1 p-2 lg:p-4 flex flex-col min-h-0">
             <h3 className="font-semibold text-gray-800 mb-3 flex-shrink-0 text-sm lg:text-base">
-              {isVideo ? 'Video Summary' : isWeb ? 'Web Page Summary' : 'Document Content'}
+              {showTranscript ? 'Transcript' : isVideo ? 'Video Summary' : isWeb ? 'Web Page Summary' : 'Document Content'}
             </h3>
             {loadingText ? (
               <div className="flex items-center justify-center py-8">
@@ -991,7 +1050,54 @@ const DocSathiChat = () => {
             ) : (
                 <div className="flex-1 min-h-0 overflow-y-auto bg-gray-50 rounded-lg border border-gray-200 relative">
                 <div className="p-4">
-                  {documentText ? (
+                  {showTranscript && transcriptSegments ? (
+                    // ✅ Show timestamped transcript for YouTube videos
+                    <div className="space-y-2 select-text">
+                      {transcriptSegments.map((segment, index) => {
+                        const minutes = Math.floor(segment.start / 60);
+                        const seconds = Math.floor(segment.start % 60);
+                        const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                        
+                        return (
+                          <div 
+                            key={index} 
+                            className="flex gap-3 hover:bg-gray-100 p-2 rounded transition-colors cursor-pointer group"
+                            onClick={() => {
+                              // Jump to video timestamp when clicked
+                              if (documentUrl) {
+                                const timestamp = Math.floor(segment.start);
+                                // Handle both youtube.com and youtu.be URLs
+                                let videoUrl = documentUrl;
+                                if (videoUrl.includes('youtu.be')) {
+                                  // youtu.be format: add timestamp
+                                  videoUrl = videoUrl.includes('?') 
+                                    ? `${videoUrl}&t=${timestamp}s`
+                                    : `${videoUrl}?t=${timestamp}s`;
+                                } else {
+                                  // youtube.com format: add or update t parameter
+                                  if (videoUrl.includes('&t=') || videoUrl.includes('?t=')) {
+                                    videoUrl = videoUrl.replace(/([?&]t=)\d+s?/g, `$1${timestamp}s`);
+                                  } else {
+                                    videoUrl = videoUrl.includes('?') 
+                                      ? `${videoUrl}&t=${timestamp}s`
+                                      : `${videoUrl}?t=${timestamp}s`;
+                                  }
+                                }
+                                window.open(videoUrl, '_blank');
+                              }
+                            }}
+                          >
+                            <span className="text-xs font-mono text-blue-600 font-semibold flex-shrink-0 group-hover:text-blue-800">
+                              {timeString}
+                            </span>
+                            <span className="text-sm text-gray-800 flex-1 leading-relaxed">
+                              {segment.text}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : documentText ? (
                     <div className="space-y-4 select-text">
                       <FormattedMessage content={documentText} />
                     </div>

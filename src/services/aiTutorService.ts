@@ -15,8 +15,11 @@ function buildHttpUrl(path: string) {
 }
 
 export interface CreateConversationPayload {
+  exam_type?: string;
+  exam_name?: string;
   subject?: string;
-  topic?: string;  // ✅ Add topic field
+  topic?: string;
+  tags?: string[];
   user_id?: number;
 }
 
@@ -41,6 +44,119 @@ export const aiTutorService = {
   async endConversation(conversationId: string) {
     const res = await axios.put(buildHttpUrl(`/ai-tutor/conversation/${conversationId}/end`));
     return res.data as { success: boolean };
+  },
+
+  async explainConcept(conversationId: string, subject: string, topic: string) {
+    const formData = new FormData();
+    formData.append('conversation_id', conversationId);
+    formData.append('subject', subject);
+    formData.append('topic', topic);
+    
+    const res = await axios.post(buildHttpUrl('/ai-tutor/explain-concept'), formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return res.data as { 
+      success: boolean; 
+      data?: { 
+        explanation: string; 
+        subject: string; 
+        topic: string; 
+        conversation_id: string;
+        web_results_used: boolean;
+      } 
+    };
+  },
+
+  async practiceProblem(conversationId: string, subject: string, topic: string) {
+    const formData = new FormData();
+    formData.append('conversation_id', conversationId);
+    formData.append('subject', subject);
+    formData.append('topic', topic);
+    
+    const res = await axios.post(buildHttpUrl('/ai-tutor/practice-problem'), formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return res.data as { 
+      success: boolean; 
+      data?: { 
+        problem: string; 
+        subject: string; 
+        topic: string; 
+        conversation_id: string;
+        web_results_used: boolean;
+      } 
+    };
+  },
+
+  async studyGuide(conversationId: string, subject: string, topic: string) {
+    const formData = new FormData();
+    formData.append('conversation_id', conversationId);
+    formData.append('subject', subject);
+    formData.append('topic', topic);
+    
+    const res = await axios.post(buildHttpUrl('/ai-tutor/study-guide'), formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return res.data as { 
+      success: boolean; 
+      data?: { 
+        guide: string; 
+        subject: string; 
+        topic: string; 
+        conversation_id: string;
+        web_results_used: boolean;
+      } 
+    };
+  },
+
+  async keyPoints(conversationId: string, subject: string, topic: string) {
+    const formData = new FormData();
+    formData.append('conversation_id', conversationId);
+    formData.append('subject', subject);
+    formData.append('topic', topic);
+    
+    const res = await axios.post(buildHttpUrl('/ai-tutor/key-points'), formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return res.data as { 
+      success: boolean; 
+      data?: { 
+        key_points: string; 
+        subject: string; 
+        topic: string; 
+        conversation_id: string;
+        web_results_used: boolean;
+      } 
+    };
+  },
+
+  async getExamConversations(userId: number, examType: string) {
+    const res = await axios.get(buildHttpUrl(`/ai-tutor/conversations/exam/${userId}/${encodeURIComponent(examType)}`));
+    return res.data as { [subject: string]: ConversationSummary[] };
+  },
+
+  async getConversation(conversationId: string) {
+    const res = await axios.get(buildHttpUrl(`/ai-tutor/conversations/${conversationId}`));
+    return res.data as {
+      _id: string;
+      exam_type?: string;
+      exam_name?: string;
+      subject?: string;
+      topic?: string;
+      messages?: any[];
+      explain_concept?: any;
+      practice_problem?: any;
+      study_guide?: any;
+      key_points?: any;
+    };
   },
 };
 

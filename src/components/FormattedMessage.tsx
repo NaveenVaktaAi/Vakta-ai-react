@@ -1,4 +1,8 @@
 import React from "react";
+import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css'; // Import KaTeX CSS
 
 interface FormattedMessageProps {
   content: string;
@@ -7,423 +11,150 @@ interface FormattedMessageProps {
 export default function FormattedMessage({ content }: FormattedMessageProps) {
   const safeContent = typeof content === "string" ? content : String(content || "");
 
-  // Check if content contains HTML tags
-  const hasHTML = /<[^>]+>/.test(safeContent);
-  
-  if (hasHTML) {
-    // ✅ ULTRA-ROBUST HTML CLEANING - Handle ALL edge cases
-    let cleanHTML = safeContent;
+  // Preprocess content to convert non-standard math delimiters to standard LaTeX format
+  // Backend sends: [ ... ] for display math and ( ... ) for inline math
+  // Convert to: $$...$$ for display math and $...$ for inline math
+  const preprocessMath = (text: string): string => {
+    let processed = text;
     
-    // Step 0: Decode HTML entities FIRST (in case HTML is escaped)
-    cleanHTML = cleanHTML
-      .replace(/&amp;/g, '&')  // Do & first to avoid double-decoding
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&#x27;/g, "'")
-      .replace(/&#x2F;/g, '/');
+    // Helper function to check if content is likely LaTeX math
+    const isMathContent = (content: string): boolean => {
+      // Check for LaTeX commands (like \frac, \sqrt, \omega, \text, \rho, etc.)
+      const hasLaTeXCommand = /\\[a-zA-Z]+\{/.test(content) || /\\[a-zA-Z]+/.test(content);
+      // Check for math symbols
+      const hasMathSymbols = /[=+\-*/√∑∫∞×÷^_²³]/.test(content);
+      // Check for Greek letters (Unicode or LaTeX commands like \omega, \rho, etc.)
+      const hasGreek = /[αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ]|\\[a-zA-Z]+/.test(content);
+      // Check for superscripts/subscripts
+      const hasSubSuper = /[^_]|\\text\{|\\frac\{|\\sqrt\{/.test(content);
+      
+      return hasLaTeXCommand || hasMathSymbols || hasGreek || hasSubSuper;
+    };
     
-    // Step 1: Remove ALL attributes from opening tags (including nested quotes, malformed attributes)
-    cleanHTML = cleanHTML.replace(/<(\/?)(\w+)([^>]*)>/gi, (match, closingSlash, tagName, attributes) => {
-      // If it's a closing tag, return as-is
-      if (closingSlash) {
-        return `</${tagName}>`;
-      }
-      // For opening tags, remove ALL attributes - handle even malformed HTML
-      return `<${tagName}>`;
-    });
-    
-    // Step 2: Clean up any self-closing tags (img, br, hr, etc.)
-    cleanHTML = cleanHTML
-      .replace(/<img>/gi, '')
-      .replace(/<br>/gi, '<br />')
-      .replace(/<hr>/gi, '<hr />');
-    
-    // Step 3: Remove any remaining malformed tags or attributes that slipped through
-    cleanHTML = cleanHTML
-      .replace(/<\s+>/g, '')  // Remove empty tags
-      .replace(/<(\w+)\s+>/g, '<$1>')  // Clean extra spaces
-      .replace(/<\/\s+>/g, '');  // Remove malformed closing tags
-    
-    // Step 4: Now add ONLY our clean Tailwind classes (in proper order)
-    cleanHTML = cleanHTML
-      // Headings first (most specific)
-      .replace(/<h1>/gi, '<h1 class="font-bold mt-6 mb-3 text-2xl text-blue-700 border-b border-blue-200 pb-1">')
-      .replace(/<h2>/gi, '<h2 class="font-bold mt-6 mb-3 text-xl text-blue-600 border-b border-blue-200 pb-1">')
-      .replace(/<h3>/gi, '<h3 class="font-bold mt-5 mb-2 text-lg text-blue-600">')
-      .replace(/<h4>/gi, '<h4 class="font-bold mt-4 mb-2 text-base text-blue-600">')
-      .replace(/<h5>/gi, '<h5 class="font-semibold mt-3 mb-2 text-sm text-blue-600">')
-      .replace(/<h6>/gi, '<h6 class="font-semibold mt-3 mb-2 text-xs text-blue-600">')
-      // Text formatting
-      .replace(/<strong>/gi, '<strong class="font-semibold text-gray-900">')
-      .replace(/<b>/gi, '<strong class="font-semibold text-gray-900">')
-      .replace(/<em>/gi, '<em class="italic text-gray-700">')
-      .replace(/<i>/gi, '<em class="italic text-gray-700">')
-      // Code
-      .replace(/<code>/gi, '<code class="bg-gray-100 px-2 py-0.5 rounded text-sm font-mono text-indigo-600">')
-      .replace(/<pre>/gi, '<pre class="bg-gray-100 p-3 rounded-lg overflow-x-auto my-3">')
-      // Lists
-      .replace(/<ul>/gi, '<ul class="list-disc pl-6 space-y-2 my-3">')
-      .replace(/<ol>/gi, '<ol class="list-decimal pl-6 space-y-2 my-3">')
-      .replace(/<li>/gi, '<li class="text-gray-800">')
-      // Other elements
-      .replace(/<p>/gi, '<p class="text-gray-800 mb-3 leading-relaxed">')
-      .replace(/<blockquote>/gi, '<blockquote class="border-l-4 border-blue-400 pl-4 italic text-gray-700 my-3">')
-      .replace(/<span>/gi, '<span>');  // Keep spans but without classes
-    
-    // Step 5: Remove duplicate/nested strong tags (fixes <strong><strong>text</strong></strong>)
-    cleanHTML = cleanHTML
-      // Remove nested strong tags: <strong><strong>text</strong></strong> → <strong>text</strong>
-      .replace(/<strong>\s*<strong>/gi, '<strong>')
-      .replace(/<\/strong>\s*<\/strong>/gi, '</strong>')
-      // Remove triple nesting
-      .replace(/<strong>\s*<strong>\s*<strong>/gi, '<strong>')
-      .replace(/<\/strong>\s*<\/strong>\s*<\/strong>/gi, '</strong>')
-      // Remove nested b/strong: <strong><b>text</b></strong> → <strong>text</strong>
-      .replace(/<strong>\s*<b>/gi, '<strong>')
-      .replace(/<\/b>\s*<\/strong>/gi, '</strong>')
-      .replace(/<b>\s*<strong>/gi, '<strong>')
-      .replace(/<\/strong>\s*<\/b>/gi, '</strong>');
-    
-    // Step 6: Final cleanup - remove any stray attributes that might remain
-    cleanHTML = cleanHTML.replace(/<(\w+)([^>]*class[^>]*)>/gi, (match, tagName) => {
-      // If we find a tag with class attribute that we missed, strip it again
-      return `<${tagName}>`;
-    });
-    
-    // If content has HTML, render it safely with basic formatting
-    return (
-      <div className="space-y-4 text-base leading-7 text-gray-800" style={{ color: '#1f2937 !important' }}>
-        <div 
-          className="prose prose-sm max-w-none [&_*]:text-gray-800 [&_*]:!text-gray-800 [&_p]:text-gray-800 [&_strong]:text-gray-900 [&_strong]:font-semibold [&_em]:italic [&_h1]:text-blue-700 [&_h2]:text-blue-600 [&_h3]:text-blue-600 [&_li]:text-gray-800"
-          style={{ color: '#1f2937' }}
-          dangerouslySetInnerHTML={{ __html: cleanHTML }}
-        />
-      </div>
-    );
-  }
-
-  // Split into blocks separated by double newlines for paragraphs, sections
-  const blocks = safeContent.split(/\n{2,}/);
-
-  return (
-    <div className="space-y-4 text-base leading-7 text-gray-800 [&_*]:text-gray-800 [&_*]:!text-gray-800 [&_strong]:font-semibold [&_strong]:text-gray-900 [&_strong]:!text-gray-900 [&_em]:italic [&_code]:bg-gray-100 [&_code]:px-2 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-sm [&_code]:font-mono [&_code]:text-indigo-600 [&_h1]:text-blue-700 [&_h1]:font-bold [&_h2]:text-blue-600 [&_h2]:font-bold [&_h3]:text-blue-600 [&_h3]:font-bold [&_ul]:my-4 [&_ol]:my-4 [&_li]:text-gray-800 [&_li]:leading-relaxed" style={{ color: '#1f2937 !important' }}>
-      {blocks.map((block, blockIndex) => {
-        const lines = block.split("\n");
-        const elements: React.ReactNode[] = [];
+    // Step 1: Convert display math [ ... ] → $$ ... $$
+    // Handle nested brackets by finding matching pairs
+    const convertDisplayMath = (str: string): string => {
+      let result = '';
         let i = 0;
-
-        while (i < lines.length) {
-          let line = lines[i].trim();
-
-          if (!line) {
-            i++;
-            continue;
+      while (i < str.length) {
+        if (str[i] === '[' && (i === 0 || str[i-1] !== '\\')) {
+          // Find matching closing bracket (handle nested brackets)
+          let depth = 1;
+          let j = i + 1;
+          while (j < str.length && depth > 0) {
+            if (str[j] === '[' && str[j-1] !== '\\') depth++;
+            if (str[j] === ']' && str[j-1] !== '\\') depth--;
+            j++;
           }
-
-          // Markdown support for bold, italic, inline code (NO inline styles/classes - handled by CSS)
-          const processMarkdown = (text: string) => {
-            // Skip markdown processing if text already contains HTML tags (to avoid duplicates)
-            if (/<[^>]+>/.test(text)) {
-              // If HTML exists, just clean attributes and return
-              return text.replace(/<(\w+)([^>]*)>/gi, (match, tagName) => `<${tagName}>`);
+          
+          if (depth === 0) {
+            // Found matching bracket
+            const mathContent = str.substring(i + 1, j - 1);
+            if (isMathContent(mathContent.trim())) {
+              result += `$$${mathContent.trim()}$$`;
+              i = j;
+              continue;
             }
-            
-            // Otherwise, process markdown normally
-            let processed = text
-              .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-              .replace(/\*(.*?)\*/g, '<em>$1</em>')
-              .replace(/`(.*?)`/g, '<code>$1</code>');
-            
-            // Remove duplicate/nested strong tags that might be created
-            processed = processed
-              .replace(/<strong>\s*<strong>/gi, '<strong>')
-              .replace(/<\/strong>\s*<\/strong>/gi, '</strong>')
-              .replace(/<strong>\s*<b>/gi, '<strong>')
-              .replace(/<\/b>\s*<\/strong>/gi, '</strong>')
-              .replace(/<b>\s*<strong>/gi, '<strong>')
-              .replace(/<\/strong>\s*<\/b>/gi, '</strong>');
-            
-            return processed;
+          }
+        }
+        result += str[i];
+        i++;
+      }
+      return result;
           };
 
-          line = processMarkdown(line);
+    processed = convertDisplayMath(processed);
 
-          // Headings: Support markdown # syntax (###, ##, #)
-          let headingLevel = 0;
-          const hashMatch = line.match(/^(#{1,6})\s*(.+)/);
-          if (hashMatch) {
-            headingLevel = hashMatch[1].length;
-            line = hashMatch[2].trim();
-            // Process markdown in heading text (for bold, etc.)
-            line = processMarkdown(line);
-            // Clean HTML attributes
-            line = line.replace(/<(\w+)([^>]*)>/gi, (match, tagName) => `<${tagName}>`);
-          } else if (
-            line.length < 50 &&
-            line === line.toUpperCase() &&
-            line.endsWith(":") &&
-            !line.includes("→") &&
-            !line.includes("=") &&
-            /^[A-Z\s:]+$/.test(line)
-          ) {
-            headingLevel = 3;
+    // Step 2: Convert inline math ( ... ) → $ ... $
+    // Handle nested parentheses by finding matching pairs
+    // But skip if inside display math (already processed)
+    const convertInlineMath = (str: string): string => {
+      let result = '';
+      let i = 0;
+      let inDisplayMath = false;
+      
+      while (i < str.length) {
+        // Track if we're inside display math
+        if (str.substring(i, i+2) === '$$') {
+          inDisplayMath = !inDisplayMath;
+          result += '$$';
+          i += 2;
+            continue;
           }
-          if (headingLevel > 0) {
-            const HeadingTag = `h${headingLevel}` as keyof JSX.IntrinsicElements;
-            elements.push(
-              <HeadingTag
-                key={`heading-${blockIndex}-${i}`}
-                className={`font-bold mt-6 mb-3 ${headingLevel === 1 ? 'text-2xl text-blue-700 border-b-2 border-blue-300' : headingLevel === 2 ? 'text-xl text-blue-600 border-b border-blue-200' : 'text-lg text-blue-600 border-b border-blue-200'} pb-2`}
-              >
-                <span dangerouslySetInnerHTML={{ __html: line.replace(/:$/, "") }} />
-              </HeadingTag>
-            );
+
+        // Skip processing if inside display math
+        if (inDisplayMath) {
+          result += str[i];
             i++;
             continue;
           }
 
-          // Handle potential category prefixes like "Chemical Reaction: "
-          if (line.includes(": ") && line.split(":")[0].toLowerCase().includes("reaction")) {
-            const [prefix, ...rest] = line.split(": ");
-            const content = rest.join(": ").trim();
-            elements.push(
-              <p key={`prefix-${blockIndex}-${i}`} className="leading-relaxed">
-                <strong className="text-blue-600">{prefix}:</strong> {content}
-              </p>
-            );
-            i++;
-            continue;
+        // Process inline math outside display math blocks
+        if (str[i] === '(' && (i === 0 || str[i-1] !== '\\')) {
+          // Find matching closing parenthesis
+          let depth = 1;
+          let j = i + 1;
+          while (j < str.length && depth > 0) {
+            if (str[j] === '(' && str[j-1] !== '\\') depth++;
+            if (str[j] === ')' && str[j-1] !== '\\') depth--;
+            j++;
           }
 
-          // Numbered lists (multi-line) - improved spacing and styling
-          if (/^\d+\.\s/.test(lines[i])) {
-            const listItems: string[] = [];
-            while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
-              let itemLine = lines[i].replace(/^\d+\.\s*/, "").trim();
-              itemLine = processMarkdown(itemLine);
-              // Clean any HTML attributes
-              itemLine = itemLine.replace(/<(\w+)([^>]*)>/gi, (match, tagName) => `<${tagName}>`);
-              listItems.push(itemLine);
-              i++;
-            }
-            elements.push(
-              <ol key={`numlist-${blockIndex}-${i}`} className="list-decimal pl-6 sm:pl-8 space-y-3 my-4 text-gray-800">
-                {listItems.map((item, idx) => (
-                  <li key={idx} className="leading-relaxed" dangerouslySetInnerHTML={{ __html: item }} />
-                ))}
-              </ol>
-            );
-            continue;
-          }
-
-          // Bullet lists (multi-line) - improved spacing and styling
-          if (/^[-*•]\s/.test(lines[i])) {
-            const listItems: string[] = [];
-            while (i < lines.length && /^[-*•]\s/.test(lines[i])) {
-              let itemLine = lines[i].replace(/^[-*•]\s*/, "").trim();
-              itemLine = processMarkdown(itemLine);
-              // Clean any HTML attributes
-              itemLine = itemLine.replace(/<(\w+)([^>]*)>/gi, (match, tagName) => `<${tagName}>`);
-              listItems.push(itemLine);
-              i++;
-            }
-            elements.push(
-              <ul key={`bullist-${blockIndex}-${i}`} className="list-disc pl-6 sm:pl-8 space-y-3 my-4 text-gray-800">
-                {listItems.map((item, idx) => (
-                  <li key={idx} className="leading-relaxed" dangerouslySetInnerHTML={{ __html: item }} />
-                ))}
-              </ul>
-            );
-            continue;
-          }
-
-          // Important notes or highlights
-          if (line.includes("important") || line.includes("note") || line.includes("tip") || line.includes("key point") || line.startsWith("!")) {
-            let noteContent = line.replace(/^!/, "").trim();
-            while (i + 1 < lines.length && (lines[i + 1].startsWith("  ") || !/^[#-*0-9]/.test(lines[i + 1]))) {
-              i++;
-              noteContent += " " + lines[i].trim();
-            }
-            noteContent = processMarkdown(noteContent);
-            // Clean any HTML attributes
-            noteContent = noteContent.replace(/<(\w+)([^>]*)>/gi, (match, tagName) => `<${tagName}>`);
-            elements.push(
-              <div key={`note-${blockIndex}-${i}`} className="my-3 p-3 bg-yellow-100/80 border-l-4 border-yellow-400 rounded-r-md text-yellow-800 text-sm leading-relaxed">
-                <strong className="block font-semibold mb-1">📌 Important Note:</strong>
-                <span dangerouslySetInnerHTML={{ __html: noteContent }} />
-              </div>
-            );
-            i++;
-            continue;
-          }
-
-          // LaTeX Math Expressions - Render without hardcoded "Formula" heading
-          if (/\\\[|\\\(|\$\$|\$/.test(line) || /\\(begin|end){equation}/.test(line) || /[0-9a-zA-Z]+\^/.test(line) || /∫|∑|√/.test(line)) {
-            let formula = line;
-            let isDisplayMath = false;
+          if (depth === 0) {
+            // Found matching parenthesis
+            const mathContent = str.substring(i + 1, j - 1);
+            const trimmed = mathContent.trim();
             
-            if (line.includes('\\[') || line.includes('$$')) {
-              isDisplayMath = true;
-              while (i + 1 < lines.length && !lines[i + 1].includes('\\]') && !lines[i + 1].includes('$$')) {
-                i++;
-                formula += "\n" + lines[i].trim();
-              }
-              if (i + 1 < lines.length) {
-                i++;
-                formula += "\n" + lines[i].trim();
-              }
-            } else {
-              while (i + 1 < lines.length && /[$\[\]]/.test(lines[i + 1])) {
-                i++;
-                formula += "\n" + lines[i].trim();
-              }
-            }
+            // Convert if it's likely math
+            // Check for single variables like ( I ), ( \rho ), etc.
+            const isSingleVar = /^\s*\\?[a-zA-Zαβγδεζηθικλμνξοπρστυφχψω]+\s*$/.test(trimmed);
+            // Check for math expressions
+            const isMathExpr = trimmed.length < 100 && isMathContent(trimmed);
             
-            let cleanFormula = formula
-              .replace(/\\\[/g, '')
-              .replace(/\\\]/g, '')
-              .replace(/\\\(/g, '')
-              .replace(/\\\)/g, '')
-              .replace(/\$\$/g, '')
-              .replace(/\$/g, '')
-              .trim();
-            
-            // Render as simple code block without "Formula" heading
-            elements.push(
-              <div key={`formula-${blockIndex}-${i}`} className={`my-3 p-4 ${isDisplayMath ? 'bg-blue-50/80 border border-blue-300' : 'bg-indigo-50/80 border border-indigo-300'} rounded-lg`}>
-                <div className={`${isDisplayMath ? 'text-center' : ''} text-blue-800`}>
-                  <code className={`font-mono text-sm whitespace-pre-wrap ${isDisplayMath ? 'text-base' : ''}`}>
-                    {cleanFormula}
-                  </code>
-                </div>
-              </div>
-            );
-            i++;
+            if (isSingleVar || isMathExpr) {
+              result += `$${trimmed}$`;
+              i = j;
             continue;
           }
-
-          // Calculations - Render without hardcoded "Calculation" heading
-          if (
-            (line.includes("calculate") || line.includes("solve") || line.includes("we can find") || line.includes("using")) && 
-            (/[0-9]+\s*[+\-*/=]\s*[0-9]+/.test(line) || /\\[\[\]\(\)]/.test(line)) &&
-            !line.includes("→") &&
-            line.length < 300
-          ) {
-            let calcContent = line;
-            while (i + 1 < lines.length && (
-              /[0-9+\-*/=]/.test(lines[i + 1]) || 
-              /\\[\[\]\(\)]/.test(lines[i + 1]) ||
-              lines[i + 1].includes("=") ||
-              lines[i + 1].includes("m/s") ||
-              lines[i + 1].trim().length < 50
-            )) {
-              i++;
-              calcContent += "\n" + lines[i].trim();
-            }
-            calcContent = processMarkdown(calcContent);
-            // Clean any HTML attributes
-            calcContent = calcContent.replace(/<(\w+)([^>]*)>/gi, (match, tagName) => `<${tagName}>`);
-            // Render as simple content without "Calculation" heading
-            elements.push(
-              <div key={`calc-${blockIndex}-${i}`} className="my-3 p-4 bg-gradient-to-r from-indigo-50 to-blue-50 rounded-lg border border-indigo-200">
-                <div className="text-indigo-800 leading-relaxed">
-                  <div dangerouslySetInnerHTML={{ __html: calcContent }} />
-                </div>
-              </div>
-            );
-            i++;
-            continue;
           }
-
-          // Chemical Reactions
-          if (
-            line.includes("→") && 
-            (/[A-Z][a-z]?\d*[A-Z][a-z]?\d*/.test(line) || /H₂O|CO₂|CH₄|NaCl|CaCO₃/.test(line))
-          ) {
-            let reaction = line;
-            while (i + 1 < lines.length && lines[i + 1].includes("→")) {
-              i++;
-              reaction += " " + lines[i].trim();
-            }
-            const parts = reaction.split("→");
-            let reactant = parts[0]?.trim() || "";
-            let product = parts.slice(1).join("→").trim();
-            reactant = processMarkdown(reactant);
-            product = processMarkdown(product);
-            // Clean any HTML attributes
-            reactant = reactant.replace(/<(\w+)([^>]*)>/gi, (match, tagName) => `<${tagName}>`);
-            product = product.replace(/<(\w+)([^>]*)>/gi, (match, tagName) => `<${tagName}>`);
-
-            let condition = "";
-            if (/Δ|heat/i.test(reaction)) condition = " (Heat)";
-            else if (/electricity|electrolysis/i.test(reaction)) condition = " (Electricity)";
-            else if (/light/i.test(reaction)) condition = " (Light)";
-
-            elements.push(
-              <div key={`reaction-${blockIndex}-${i}`} className="my-3 p-3 bg-cyan-50/80 rounded-md text-sm font-mono text-cyan-800">
-                <strong className="block font-semibold text-cyan-700 mb-1">Chemical Reaction{condition}:</strong>
-                <div className="flex items-center justify-center gap-4">
-                  <span dangerouslySetInnerHTML={{ __html: reactant }} />
-                  <span className="text-2xl">→</span>
-                  <span dangerouslySetInnerHTML={{ __html: product }} />
-                </div>
-              </div>
-            );
-            i++;
-            continue;
-          }
-
-          // Biology Processes - Removed hardcoded "Biology Concept" heading
-          // Content will be rendered as regular paragraph instead
-
-          // Image handling
-          const imageMatch = line.match(/\[Image Reference:\s*(https?:\/\/[^\s\]]+\.(jpg|jpeg|png|gif|webp|svg)(\?[^\s\]]*)?)\s*\]/i) || line.match(/(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp|svg)(\?[^\s]*)?)/i);
-          if (imageMatch) {
-            const imageUrl = imageMatch[1] || imageMatch[0];
-            elements.push(
-              <figure key={`img-${blockIndex}-${i}`} className="my-4">
-                <img
-                  src={imageUrl}
-                  alt="Reference Image"
-                  className="max-w-full h-auto rounded-lg shadow-md mx-auto"
-                  style={{ maxHeight: "400px" }}
-                  onError={(e) => {
-                    const target = e.target as HTMLImageElement;
-                    target.style.display = "none";
-                    target.parentElement!.innerHTML = `<div class="p-4 bg-gray-100 rounded border-2 border-dashed border-gray-300 text-center text-sm text-gray-600">Image could not be loaded: ${imageUrl}</div>`;
-                  }}
-                />
-                <figcaption className="text-xs text-gray-500 mt-2 text-center">Reference Image</figcaption>
-              </figure>
-            );
-            i++;
-            continue;
-          }
-
-          // Default paragraph - clean any remaining HTML attributes and remove duplicate strong tags
-          let cleanLine = line.replace(/<(\w+)([^>]*)>/gi, (match, tagName) => `<${tagName}>`);
-          // Remove duplicate/nested strong tags
-          cleanLine = cleanLine
-            .replace(/<strong>\s*<strong>/gi, '<strong>')
-            .replace(/<\/strong>\s*<\/strong>/gi, '</strong>')
-            .replace(/<strong>\s*<b>/gi, '<strong>')
-            .replace(/<\/b>\s*<\/strong>/gi, '</strong>')
-            .replace(/<b>\s*<strong>/gi, '<strong>')
-            .replace(/<\/strong>\s*<\/b>/gi, '</strong>');
-          
-          // ✅ Enhanced paragraph styling for AI Tutor responses
-          elements.push(
-            <p key={`p-${blockIndex}-${i}`} className="leading-relaxed text-gray-800 mb-3" style={{ color: '#1f2937' }} dangerouslySetInnerHTML={{ __html: cleanLine }} />
-          );
-          i++;
         }
+        result += str[i];
+        i++;
+      }
+      return result;
+    };
+    
+    processed = convertInlineMath(processed);
+    
+    return processed;
+  };
 
-        return <div key={blockIndex} className="space-y-2">{elements}</div>;
-      })}
+  const processedContent = preprocessMath(safeContent);
+
+  // Always use react-markdown with math plugins for consistent rendering
+  // This ensures math expressions, markdown formatting, and HTML are all handled properly
+  return (
+    <div className="prose prose-sm max-w-none 
+      [&_*]:text-gray-800 [&_*]:!text-gray-800 
+      [&_p]:text-gray-800 [&_p]:leading-relaxed [&_p]:mb-3
+      [&_strong]:text-gray-900 [&_strong]:font-semibold 
+      [&_em]:italic [&_em]:text-gray-700
+      [&_h1]:text-blue-700 [&_h1]:font-bold [&_h1]:text-2xl [&_h1]:mt-6 [&_h1]:mb-3 [&_h1]:border-b [&_h1]:border-blue-200 [&_h1]:pb-1
+      [&_h2]:text-blue-600 [&_h2]:font-bold [&_h2]:text-xl [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:border-b [&_h2]:border-blue-200 [&_h2]:pb-1
+      [&_h3]:text-blue-600 [&_h3]:font-bold [&_h3]:text-lg [&_h3]:mt-4 [&_h3]:mb-2
+      [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:space-y-2 [&_ul]:my-4
+      [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:space-y-2 [&_ol]:my-4
+      [&_li]:text-gray-800 [&_li]:leading-relaxed
+      [&_code]:bg-gray-100 [&_code]:px-2 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-sm [&_code]:font-mono [&_code]:text-indigo-600
+      [&_pre]:bg-gray-100 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-3
+      [&_.katex]:text-gray-800 [&_.katex-display]:text-center [&_.katex-display]:my-4
+      [&_.katex-display]:bg-blue-50 [&_.katex-display]:border [&_.katex-display]:border-blue-300 [&_.katex-display]:rounded-lg [&_.katex-display]:p-4">
+      <ReactMarkdown
+        remarkPlugins={[remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+      >
+        {processedContent}
+      </ReactMarkdown>
     </div>
   );
 }
-

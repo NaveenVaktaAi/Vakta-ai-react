@@ -1,8 +1,10 @@
 import { useAuth } from '../context/AuthContext';
+import { useNavigate } from 'react-router-dom';
 import { GraduationCap, Target, BookOpen, Brain, TrendingUp, Award, Clock, Users } from 'lucide-react';
 
 const Dashboard = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
 
   const stats = [
     { label: 'JEE Aspirants', value: '10K+', icon: Target, color: 'bg-blue-500' },
@@ -58,8 +60,12 @@ const Dashboard = () => {
                 </p>
               </div>
               <div className="hidden md:block flex-shrink-0 ml-4">
-                <div className="w-20 h-20 sm:w-24 sm:h-24 lg:w-32 lg:h-32 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm">
-                  <Brain className="w-10 h-10 sm:w-12 sm:h-12 lg:w-16 lg:h-16 text-white" />
+                <div className="w-20 h-20 sm:w-24 sm:h-24 lg:w-32 lg:h-32 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm p-2">
+                  <img 
+                    src="/Vakta.png" 
+                    alt="Vakta AI" 
+                    className="w-full h-full object-contain"
+                  />
                 </div>
               </div>
             </div>
@@ -110,7 +116,18 @@ const Dashboard = () => {
                       </span>
                     ))}
                   </div>
-                  <button className="mt-4 w-full py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg font-medium hover:shadow-lg transition-all">
+                  <button
+                    onClick={() => {
+                      if (feature.title === 'IIT JEE Preparation') {
+                        navigate(`/exam-conversations/${encodeURIComponent('IIT JEE')}`);
+                      } else if (feature.title === 'NEET Preparation') {
+                        navigate(`/exam-conversations/${encodeURIComponent('NEET')}`);
+                      } else {
+                        navigate('/ai-tutor');
+                      }
+                    }}
+                    className="mt-4 w-full py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg font-medium hover:shadow-lg transition-all"
+                  >
                     Start Learning
                   </button>
                 </div>

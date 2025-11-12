@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { aiTutorService, buildTutorWsUrl } from '../services/aiTutorService';
+import { fetchAndDecompressAudio, extractCompressionMetadata, isCompressedAudioUrl } from '../utils/audioDecompression';
 
 export interface TutorMessage {
   id?: string;
@@ -156,12 +157,12 @@ export function useAiTutorWebSocket(userId: number) {
               break;
               
             case 'stream_start':
-              console.log('[AI Tutor] stream_start - Setting typing and thinking indicators');
+              console.log('[AI Tutor] stream_start - Setting typing indicator');
+              // Keep typing indicator ON - it should already be ON from sendMessage
               setIsStreaming(true);
-              setIsTyping(true);
-              // Always set a thinking status during streaming
-              setThinkingStatus('generating');
-              setThinkingMessage('Generating response...');
+              setIsTyping(true); // Ensure it's ON
+              // Don't set thinking message/status - just show three dots
+              // Only show thinking message if backend explicitly sends thinking_indicator
               // Initialize new message
               setMessages((prev) => [...prev, { 
                 role: 'assistant', 
@@ -172,7 +173,11 @@ export function useAiTutorWebSocket(userId: number) {
               
             case 'stream_chunk':
               // Append chunk to the last message (assistant message)
+              // CRITICAL: Keep typing indicator ON during streaming - don't turn it off!
               setIsTyping(true);
+              setIsStreaming(true);
+              // Don't set thinking message/status during chunks - just show three dots
+              // Only show thinking message if backend explicitly sends thinking_indicator
               setMessages((prev) => {
                 const newMessages = [...prev];
                 const lastMsg = newMessages[newMessages.length - 1];
@@ -188,9 +193,11 @@ export function useAiTutorWebSocket(userId: number) {
               break;
               
             case 'stream_end':
+              // Only turn off typing indicator when stream ends
+              console.log('[AI Tutor] stream_end - Turning off typing indicator');
               setIsTyping(false);
               setIsStreaming(false);
-              // Clear thinking indicators
+              // Clear thinking indicators only after stream ends
               setThinkingMessage('');
               setThinkingStatus('');
               // Finalize the message with fullText (if provided and different)
@@ -210,18 +217,29 @@ export function useAiTutorWebSocket(userId: number) {
               break;
               
             case 'typing_indicator':
+              // Explicit typing indicator from backend - keep it ON
+              // Just show three dots - don't set thinking message unless backend sends it
+              console.log('[AI Tutor] typing_indicator received - keeping typing ON');
               setIsTyping(true);
+              // Don't set thinking message/status - just show dots
               break;
               
             case 'stop_typing_indicator':
+              // Only backend can explicitly stop typing indicator
+              console.log('[AI Tutor] stop_typing_indicator received - turning typing OFF');
               setIsTyping(false);
+              setIsStreaming(false);
+              setThinkingMessage('');
+              setThinkingStatus('');
               break;
               
             case 'thinking_indicator':
               // Backend sends thinking status like "Analyzing...", "Searching...", etc.
               console.log('[AI Tutor] ✅ Thinking indicator received:', data.message, data.status);
+              // Keep typing indicator ON - don't turn it off
               setIsTyping(true);
-              setThinkingMessage(data.message || '');
+              setIsStreaming(false); // Not streaming yet, just thinking
+              setThinkingMessage(data.message || 'Processing...');
               setThinkingStatus(data.status || 'thinking');
               console.log('[AI Tutor] Set state - isTyping: true, message:', data.message, 'status:', data.status);
               break;
@@ -230,6 +248,8 @@ export function useAiTutorWebSocket(userId: number) {
               console.error('[AI Tutor] Error:', data.error);
               setIsTyping(false);
               setIsStreaming(false);
+              setThinkingMessage('');
+              setThinkingStatus('');
               break;
               
             // Legacy support
@@ -256,8 +276,11 @@ export function useAiTutorWebSocket(userId: number) {
               break;
               
             case 'status':
+              // Backend explicitly sent status - show it
+              console.log('[AI Tutor] status received:', data.status, data.message);
             setThinkingStatus(String(data.status || ''));
             setThinkingMessage(String(data.message || ''));
+              setIsTyping(true); // Keep typing ON when status is shown
               break;
               
             case 'audio':
@@ -268,7 +291,8 @@ export function useAiTutorWebSocket(userId: number) {
                 audioUrl: data?.audioUrl,
                 phonemeCount: data?.phonemes?.length || 0,
                 text: data?.text,
-                firstPhoneme: data?.phonemes?.[0]
+                firstPhoneme: data?.phonemes?.[0],
+                is_compressed: data?.is_compressed
               });
               
               // Convert backend phonemes to Unity format (user's Unity expects simple format)
@@ -301,12 +325,62 @@ export function useAiTutorWebSocket(userId: number) {
                 }
               }
               
-              // ✅ Send immediately to Unity for seamless continuous playback
-              // Unity maintains its own internal queue and plays chunks one after another without gaps
+              // 🚀 Handle compressed audio: fetch, decompress, and create blob URL
               if (unityPhonemes.length > 0 && audioUrl) {
-                console.log('[AI Tutor] 🎵 Sending audio chunk to Unity (seamless continuous playback)');
+                // Check if audio is compressed
+                const compressionMetadata = extractCompressionMetadata(data);
+                const isCompressed = compressionMetadata.is_compressed || isCompressedAudioUrl(audioUrl);
                 
-                // ✅ Send directly to Unity - it handles queue and seamless playback
+                if (isCompressed) {
+                  console.log('[AI Tutor] 🗜️ Compressed audio detected, decompressing...');
+                  
+                  // Fetch and decompress audio asynchronously
+                  fetchAndDecompressAudio(audioUrl, compressionMetadata)
+                    .then((decompressedBlob) => {
+                      // Create blob URL from decompressed audio
+                      const blobUrl = URL.createObjectURL(decompressedBlob);
+                      console.log('[AI Tutor] ✅ Audio decompressed and ready:', blobUrl);
+                      
+                      // Send decompressed audio to Unity
+                      const iframes = document.querySelectorAll('iframe[src*="/WebGL/index.html"]') as NodeListOf<HTMLIFrameElement>;
+                      iframes.forEach((iframe) => {
+                        if (iframe?.contentWindow) {
+                          iframe.contentWindow.postMessage({
+                            type: 'PLAY_TTS_WITH_PHONEMES',
+                            payload: {
+                              audioUrl: blobUrl,
+                              audioData: null, // Use blob URL instead of base64
+                              phonemes: unityPhonemes,
+                              id: `audio-${Date.now()}`
+                            }
+                          }, '*');
+                          console.log('[AI Tutor] ✅ Sent decompressed audio to Unity:', {
+                            blobUrl: blobUrl,
+                            phonemesCount: unityPhonemes.length
+                          });
+                        }
+                      });
+                    })
+                    .catch((error) => {
+                      console.error('[AI Tutor] ❌ Error decompressing audio:', error);
+                      // Fallback: try sending original URL
+                      const iframes = document.querySelectorAll('iframe[src*="/WebGL/index.html"]') as NodeListOf<HTMLIFrameElement>;
+                      iframes.forEach((iframe) => {
+                        if (iframe?.contentWindow) {
+                          iframe.contentWindow.postMessage({
+                            type: 'PLAY_TTS_WITH_PHONEMES',
+                            payload: {
+                              audioUrl: audioUrl,
+                              phonemes: unityPhonemes,
+                              id: `audio-${Date.now()}`
+                            }
+                          }, '*');
+                        }
+                      });
+                    });
+                } else {
+                  // Not compressed, send directly to Unity
+                  console.log('[AI Tutor] 🎵 Sending uncompressed audio to Unity');
                 const iframes = document.querySelectorAll('iframe[src*="/WebGL/index.html"]') as NodeListOf<HTMLIFrameElement>;
                 iframes.forEach((iframe) => {
                   if (iframe?.contentWindow) {
@@ -324,6 +398,7 @@ export function useAiTutorWebSocket(userId: number) {
                     });
                   }
                 });
+                }
               } else {
                 console.warn('[AI Tutor] ⚠️ Skipping audio - no phonemes or URL');
             }
@@ -372,8 +447,21 @@ export function useAiTutorWebSocket(userId: number) {
     }
   }, [convertToUnityFormat]);
 
-  const createNewConversation = useCallback(async (subject: string, topic: string) => {  // ✅ Add topic parameter
-    const res = await aiTutorService.createConversation({ subject, topic, user_id: userId });  // ✅ Pass topic
+  const createNewConversation = useCallback(async (examType: string, subject: string, topic: string) => {
+    // Generate tags based on exam, subject, and topic
+    const tags: string[] = [];
+    if (examType) tags.push(examType);
+    if (subject) tags.push(subject);
+    if (topic) tags.push(topic);
+    
+    const res = await aiTutorService.createConversation({ 
+      exam_type: examType,
+      exam_name: examType,  // Set exam_name same as exam_type
+      subject, 
+      topic, 
+      tags,  // Include tags
+      user_id: userId 
+    });
     if (res?.success && res?.data?.conversation_id) {
       const id = res.data.conversation_id;
       setCurrentConversationId(id);
@@ -485,7 +573,12 @@ export function useAiTutorWebSocket(userId: number) {
       }
     }
     
+    // Set typing indicator immediately when message is sent
+    // Don't set thinking message/status until backend sends it
     setIsTyping(true);
+    setIsStreaming(false); // Reset streaming state
+    setThinkingStatus(''); // Clear thinking status - wait for backend
+    setThinkingMessage(''); // Clear thinking message - wait for backend
     
     // Prepare default message based on content
     let defaultMessage = 'Please analyze this content';
@@ -549,7 +642,8 @@ export function useAiTutorWebSocket(userId: number) {
       return [...prev, newMessage];
     });
     
-    setTimeout(() => setIsTyping(false), 200); // lightweight UX
+    // Don't clear typing indicator here - let backend control it via stream_end or stop_typing_indicator
+    // Typing indicator should stay ON until backend explicitly stops it
   }, [currentConversationId, userId]);
 
   // Cleanup on unmount
@@ -557,17 +651,21 @@ export function useAiTutorWebSocket(userId: number) {
 
   return {
     messages,
+    setMessages,
     isTyping,
-    isStreaming,
     thinkingMessage,
     thinkingStatus,
+    isStreaming,
     isConnected,
     connectionStatus,
     currentConversationId,
+    setCurrentConversationId,
+    connect,
+    disconnect,
     createNewConversation,
     endConversation,
     sendMessage,
-  } as const;
+  };
 }
 
 
