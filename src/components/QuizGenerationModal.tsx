@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Sparkles } from 'lucide-react';
 import { documentService } from '../services/documentService';
 import { toast } from 'react-toastify';
+import TokenLimitModal from './TokenLimitModal';
 
 interface QuizGenerationModalProps {
   isOpen: boolean;
@@ -28,6 +29,8 @@ const QuizGenerationModal = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGenerated, setIsGenerated] = useState(false);
   const [generatedQuiz, setGeneratedQuiz] = useState<any>(null);
+  const [tokenLimitData, setTokenLimitData] = useState<any>(null);
+  const [showTokenLimitModal, setShowTokenLimitModal] = useState(false);
 
   // Auto-close modal after 3 seconds when quiz is generated
   useEffect(() => {
@@ -58,20 +61,36 @@ const QuizGenerationModal = ({
         number_of_questions: numberOfQuestions
       };
 
-      toast.info('Generating quiz...');
       const response = await documentService.generateQuiz(request);
 
       if (response.success && response.data) {
         setGeneratedQuiz(response.data);
         setIsGenerated(true);
         onQuizGenerated?.(response.data);
-        toast.success('Quiz generated successfully!');
       } else {
         throw new Error(response.message || 'Failed to generate quiz');
       }
     } catch (error: any) {
       console.error('Quiz generation error:', error);
-      toast.error(error.message || 'Failed to generate quiz');
+      
+      // ✅ Check if it's a token limit error (403 with specific structure)
+      if (error.response?.status === 403 && error.response?.data?.detail) {
+        const detail = error.response.data.detail;
+        if (detail.upgradeRequired && detail.service === 'docSathi') {
+          // Show popup modal instead of toast
+          setTokenLimitData({
+            message: detail.message || 'Your free trial credits are running low.',
+            tokensRemaining: detail.tokensRemaining,
+            service: detail.service || 'docSathi',
+            upgradeRequired: detail.upgradeRequired
+          });
+          setShowTokenLimitModal(true);
+        } else {
+          toast.error(error.message || 'Failed to generate quiz');
+        }
+      } else {
+        toast.error(error.message || 'Failed to generate quiz');
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -254,6 +273,18 @@ const QuizGenerationModal = ({
           )}
         </div>
       </div>
+
+      {/* Token Limit Modal */}
+      {tokenLimitData && (
+        <TokenLimitModal
+          isOpen={showTokenLimitModal}
+          onClose={() => {
+            setShowTokenLimitModal(false);
+            setTokenLimitData(null);
+          }}
+          data={tokenLimitData}
+        />
+      )}
     </div>
   );
 };

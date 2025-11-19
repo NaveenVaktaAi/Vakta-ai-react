@@ -7,6 +7,7 @@ import MessageBubble from '../components/MessageBubble';
 import FormattedMessage from '../components/FormattedMessage';
 import TextSelectionPopup from '../components/TextSelectionPopup';
 import QuickActionsOverlay from '../components/QuickActionsOverlay';
+import TokenLimitModal from '../components/TokenLimitModal';
 import { useAuth } from '../context/AuthContext';
 
 interface ChatInterfaceProps {
@@ -15,9 +16,10 @@ interface ChatInterfaceProps {
   onChatCreated?: (newChatId: string | null) => void;
   selectedTextQuery?: string;
   onSelectedTextUsed?: () => void;
+  onTokenLimitExceeded?: (data: any) => void;
 }
 
-const ChatInterface = ({ documentId, chatId, onChatCreated, selectedTextQuery, onSelectedTextUsed }: ChatInterfaceProps) => {
+const ChatInterface = ({ documentId, chatId, onChatCreated, selectedTextQuery, onSelectedTextUsed, onTokenLimitExceeded }: ChatInterfaceProps) => {
   const [inputValue, setInputValue] = useState('');
   const [useWebSearch, setUseWebSearch] = useState(false); // Web search toggle
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -34,7 +36,7 @@ const ChatInterface = ({ documentId, chatId, onChatCreated, selectedTextQuery, o
     createNewChat,
     loadChatMessages,
     clearMessages,
-  } = useChatWebSocket(1, documentId || null, chatId);
+  } = useChatWebSocket(1, documentId || null, chatId, onTokenLimitExceeded);
 
   // Let the hook manage WS connection based on currentChatId. Avoid auto-connecting on documentId
   // to ensure the WebSocket always binds to the selected chatId.
@@ -290,7 +292,25 @@ const DocSathiChat = () => {
   const [showMobileSidebar, setShowMobileSidebar] = useState(false);
   const [showMobilePreview, setShowMobilePreview] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(false);
+  const [tokenLimitData, setTokenLimitData] = useState<any>(null);
+  const [showTokenLimitModal, setShowTokenLimitModal] = useState(false);
   const isProcessingSelectedTextRef = useRef(false);
+
+  // ✅ Token limit modal handlers
+  const closeTokenLimitModal = () => {
+    setShowTokenLimitModal(false);
+    setTokenLimitData(null);
+  };
+
+  const handleTokenLimitExceeded = (data: any) => {
+    setTokenLimitData(data);
+    // ✅ Only show modal if upgrade is required and not daily limit exceeded
+    // Show modal only if: upgradeRequired is true AND dailyLimitExceeded is not true
+    // Don't show modal for premium users (upgradeRequired=false) or daily quota exceeded
+    if (data.upgradeRequired === true && data.dailyLimitExceeded !== true) {
+      setShowTokenLimitModal(true);
+    }
+  };
 
   useEffect(() => {
     // Reset pagination when document changes
@@ -1141,6 +1161,7 @@ const DocSathiChat = () => {
           }}
           selectedTextQuery={selectedTextQuery}
           onSelectedTextUsed={() => setSelectedTextQuery("")}
+          onTokenLimitExceeded={handleTokenLimitExceeded}
         />
 
         {/* Quick Actions Overlay */}
@@ -1150,6 +1171,15 @@ const DocSathiChat = () => {
             documentTitle={documentName || 'Document'}
             userId={user?._id || '1'}
             onClose={() => setShowQuickActions(false)}
+          />
+        )}
+
+        {/* Token Limit Modal */}
+        {tokenLimitData && (
+          <TokenLimitModal
+            isOpen={showTokenLimitModal}
+            onClose={closeTokenLimitModal}
+            data={tokenLimitData}
           />
         )}
       </div>

@@ -6,9 +6,10 @@ import {
   Bot, 
   Settings, 
   LogOut,
-  GraduationCap,
   Menu,
-  X
+  X,
+  CreditCard,
+  FileText
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -26,8 +27,13 @@ const Layout = ({ children }: LayoutProps) => {
     { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
     { icon: BookOpen, label: 'DocSathi', path: '/docsathi' },
     { icon: Bot, label: 'AI Tutor', path: '/ai-tutor' },
+    { icon: FileText, label: 'Notes', path: '/notes' },
+    { icon: CreditCard, label: 'Pricing', path: '/pricing' },
     { icon: Settings, label: 'Settings', path: '/settings' },
   ];
+
+  // Admin menu items removed - now accessible from dashboard
+  const adminMenuItems: any[] = [];
 
   const handleLogout = async () => {
     await logout();
@@ -93,6 +99,8 @@ const Layout = ({ children }: LayoutProps) => {
                   </Link>
                 );
               })}
+              
+              {/* Admin Menu Items - Removed, now accessible from dashboard */}
             </nav>
 
             {/* User Info at Bottom - Mobile */}
@@ -171,6 +179,8 @@ const Layout = ({ children }: LayoutProps) => {
               </Link>
             );
           })}
+          
+          {/* Admin Menu Items - Removed, now accessible from dashboard */}
         </nav>
 
         {/* User Info at Bottom */}
@@ -211,7 +221,7 @@ const Layout = ({ children }: LayoutProps) => {
       </aside>
 
       {/* Main Content */}
-      <div className="lg:ml-64 min-h-screen pt-14 lg:pt-0">
+      <div className="lg:ml-64 min-h-screen pt-24 sm:pt-24 lg:pt-0">
         {children}
       </div>
     </div>

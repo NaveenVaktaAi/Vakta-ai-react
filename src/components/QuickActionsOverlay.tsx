@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PieChart, Bookmark, List, Play, X, Plus, Eye } from 'lucide-react';
+import { PieChart, Bookmark, List, Play, X, Plus, Eye, Download, Loader2 } from 'lucide-react';
 import { documentService } from '../services/documentService';
 import { toast } from 'react-toastify';
 import QuizGenerationModal from './QuizGenerationModal';
+import TokenLimitModal from './TokenLimitModal';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
 interface ExistingQuiz {
   quiz_id: string;
@@ -34,6 +37,10 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [loadingDocument, setLoadingDocument] = useState(false);
+  const [isDownloadingSummary, setIsDownloadingSummary] = useState(false);
+  const [isDownloadingNotes, setIsDownloadingNotes] = useState(false);
+  const [tokenLimitData, setTokenLimitData] = useState<any>(null);
+  const [showTokenLimitModal, setShowTokenLimitModal] = useState(false);
 
   // Load document data and existing quizzes when component mounts
   useEffect(() => {
@@ -116,11 +123,9 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
     setGenerationType('notes');
     
     try {
-      toast.info('Generating notes for document...');
       const response = await documentService.generateNotes(documentId);
       
       if (response.success && response.data) {
-        toast.success('Notes generated successfully!');
         // Update local state with new notes
         if (response.data.notes && response.data.title) {
           setAiNotes({
@@ -137,7 +142,25 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
       }
     } catch (error: any) {
       console.error('Error generating notes:', error);
-      toast.error(error.message || 'Failed to generate notes');
+      
+      // ✅ Check if it's a token limit error (403 with specific structure)
+      if (error.response?.status === 403 && error.response?.data?.detail) {
+        const detail = error.response.data.detail;
+        if (detail.upgradeRequired && detail.service === 'docSathi') {
+          // Show popup modal instead of toast
+          setTokenLimitData({
+            message: detail.message || 'Your free trial credits are running low.',
+            tokensRemaining: detail.tokensRemaining,
+            service: detail.service || 'docSathi',
+            upgradeRequired: detail.upgradeRequired
+          });
+          setShowTokenLimitModal(true);
+        } else {
+          toast.error(error.message || 'Failed to generate notes');
+        }
+      } else {
+        toast.error(error.message || 'Failed to generate notes');
+      }
     } finally {
       setIsGenerating(false);
       setGenerationType(null);
@@ -181,6 +204,206 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
     // Navigate to quiz page
     navigate(`/quiz/${quizId}`);
     onClose();
+  };
+
+  const handleDownloadSummaryPDF = async () => {
+    if (!summary) return;
+    
+    setIsDownloadingSummary(true);
+    try {
+      // Create a temporary div to render the content for PDF generation
+      const tempDiv = document.createElement('div');
+      tempDiv.style.position = 'absolute';
+      tempDiv.style.left = '-9999px';
+      tempDiv.style.top = '0';
+      tempDiv.style.width = '800px';
+      tempDiv.style.padding = '40px';
+      tempDiv.style.backgroundColor = 'white';
+      tempDiv.style.fontFamily = 'Arial, sans-serif';
+      tempDiv.style.fontSize = '14px';
+      tempDiv.style.lineHeight = '1.6';
+      tempDiv.style.color = '#333';
+      
+      // Create HTML structure with header and content
+      const fullHtml = `
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; margin: -40px -40px 30px -40px; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 28px;">Document Summary</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0;">DocSathi - AI-Powered Document Intelligence</p>
+        </div>
+        <div style="background: #f8fafc; border: 2px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 25px;">
+          <div style="margin: 8px 0; color: #64748b;"><span style="font-weight: bold; color: #1e40af;">Document:</span> ${documentTitle}</div>
+          <div style="margin: 8px 0; color: #64748b;"><span style="font-weight: bold; color: #1e40af;">Generated:</span> ${new Date().toLocaleString()}</div>
+        </div>
+        <div style="font-size: 14px; line-height: 1.8;">
+          <p style="margin-bottom: 15px; text-align: justify; white-space: pre-wrap;">${summary.replace(/\n/g, '<br>')}</p>
+        </div>
+        <div style="margin-top: 40px; padding-top: 20px; border-top: 2px solid #e5e7eb; text-align: center; color: #6b7280; font-size: 12px;">
+          <p>Generated by DocSathi AI • ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}</p>
+        </div>
+      `;
+      
+      tempDiv.innerHTML = fullHtml;
+      document.body.appendChild(tempDiv);
+
+      // Convert to canvas then to PDF with optimized settings
+      const canvas = await html2canvas(tempDiv, {
+        scale: 1.5,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        width: 800,
+        height: tempDiv.scrollHeight,
+        logging: false,
+        imageTimeout: 0,
+        removeContainer: true
+      });
+
+      // Create PDF
+      const imgData = canvas.toDataURL('image/jpeg', 0.85);
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+        compress: true
+      });
+
+      const imgWidth = 210;
+      const pageHeight = 295;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      // Add first page
+      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+      heightLeft -= pageHeight;
+
+      // Add additional pages if needed
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+        heightLeft -= pageHeight;
+      }
+
+      // Generate filename
+      const filename = `Summary_${documentTitle.replace(/\s+/g, '_')}_${new Date().getTime()}.pdf`;
+      
+      // Download PDF directly
+      pdf.save(filename);
+
+      // Clean up
+      document.body.removeChild(tempDiv);
+      toast.success('PDF downloaded successfully!');
+    } catch (error) {
+      console.error('Error downloading PDF:', error);
+      toast.error('Failed to download PDF. Please try again.');
+    } finally {
+      setIsDownloadingSummary(false);
+    }
+  };
+
+  const handleDownloadNotesPDF = async () => {
+    if (!aiNotes) return;
+    
+    setIsDownloadingNotes(true);
+    try {
+      // Create a temporary div to render the content for PDF generation
+      const tempDiv = document.createElement('div');
+      tempDiv.style.position = 'absolute';
+      tempDiv.style.left = '-9999px';
+      tempDiv.style.top = '0';
+      tempDiv.style.width = '800px';
+      tempDiv.style.padding = '40px';
+      tempDiv.style.backgroundColor = 'white';
+      tempDiv.style.fontFamily = 'Arial, sans-serif';
+      tempDiv.style.fontSize = '14px';
+      tempDiv.style.lineHeight = '1.6';
+      tempDiv.style.color = '#333';
+      
+      // Create notes HTML
+      const notesHtml = aiNotes.notes.map((note, index) => `
+        <div style="background: #f8fafc; border: 2px solid #e2e8f0; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+          <p style="margin: 0; color: #333; text-align: justify;">${note.replace(/\n/g, '<br>')}</p>
+        </div>
+      `).join('');
+      
+      // Create HTML structure with header and content
+      const fullHtml = `
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; margin: -40px -40px 30px -40px; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 28px;">${aiNotes.title || 'Document Notes'}</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0;">DocSathi - AI-Powered Document Intelligence</p>
+        </div>
+        <div style="background: #f8fafc; border: 2px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 25px;">
+          <div style="margin: 8px 0; color: #64748b;"><span style="font-weight: bold; color: #1e40af;">Document:</span> ${documentTitle}</div>
+          <div style="margin: 8px 0; color: #64748b;"><span style="font-weight: bold; color: #1e40af;">Total Notes:</span> ${aiNotes.notes.length}</div>
+          <div style="margin: 8px 0; color: #64748b;"><span style="font-weight: bold; color: #1e40af;">Generated:</span> ${new Date().toLocaleString()}</div>
+        </div>
+        <div style="font-size: 14px; line-height: 1.8;">
+          ${notesHtml}
+        </div>
+        <div style="margin-top: 40px; padding-top: 20px; border-top: 2px solid #e5e7eb; text-align: center; color: #6b7280; font-size: 12px;">
+          <p>Generated by DocSathi AI • ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}</p>
+        </div>
+      `;
+      
+      tempDiv.innerHTML = fullHtml;
+      document.body.appendChild(tempDiv);
+
+      // Convert to canvas then to PDF with optimized settings
+      const canvas = await html2canvas(tempDiv, {
+        scale: 1.5,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        width: 800,
+        height: tempDiv.scrollHeight,
+        logging: false,
+        imageTimeout: 0,
+        removeContainer: true
+      });
+
+      // Create PDF
+      const imgData = canvas.toDataURL('image/jpeg', 0.85);
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+        compress: true
+      });
+
+      const imgWidth = 210;
+      const pageHeight = 295;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      // Add first page
+      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+      heightLeft -= pageHeight;
+
+      // Add additional pages if needed
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+        heightLeft -= pageHeight;
+      }
+
+      // Generate filename
+      const filename = `Notes_${documentTitle.replace(/\s+/g, '_')}_${new Date().getTime()}.pdf`;
+      
+      // Download PDF directly
+      pdf.save(filename);
+
+      // Clean up
+      document.body.removeChild(tempDiv);
+      toast.success('PDF downloaded successfully!');
+    } catch (error) {
+      console.error('Error downloading PDF:', error);
+      toast.error('Failed to download PDF. Please try again.');
+    } finally {
+      setIsDownloadingNotes(false);
+    }
   };
 
   return (
@@ -293,12 +516,31 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
           <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
             <div className="p-4 border-b border-gray-200 flex items-center justify-between">
               <h3 className="font-semibold text-gray-800">Document Summary</h3>
-              <button
-                onClick={() => setShowSummaryModal(false)}
-                className="p-1 hover:bg-gray-100 rounded transition-colors"
-              >
-                <X className="w-4 h-4 text-gray-600" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleDownloadSummaryPDF}
+                  disabled={isDownloadingSummary || !summary}
+                  className="px-3 py-1.5 bg-white border-2 border-blue-600 text-blue-600 rounded-lg font-semibold hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 text-sm"
+                >
+                  {isDownloadingSummary ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Downloading...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4" />
+                      Download PDF
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => setShowSummaryModal(false)}
+                  className="p-1 hover:bg-gray-100 rounded transition-colors"
+                >
+                  <X className="w-4 h-4 text-gray-600" />
+                </button>
+              </div>
             </div>
             <div className="p-4 overflow-y-auto flex-1">
               <div className="prose prose-sm max-w-none">
@@ -315,12 +557,31 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
           <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
             <div className="p-4 border-b border-gray-200 flex items-center justify-between">
               <h3 className="font-semibold text-gray-800">{aiNotes.title || 'Document Notes'}</h3>
-              <button
-                onClick={() => setShowNotesModal(false)}
-                className="p-1 hover:bg-gray-100 rounded transition-colors"
-              >
-                <X className="w-4 h-4 text-gray-600" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleDownloadNotesPDF}
+                  disabled={isDownloadingNotes || !aiNotes}
+                  className="px-3 py-1.5 bg-white border-2 border-green-600 text-green-600 rounded-lg font-semibold hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 text-sm"
+                >
+                  {isDownloadingNotes ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Downloading...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4" />
+                      Download PDF
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => setShowNotesModal(false)}
+                  className="p-1 hover:bg-gray-100 rounded transition-colors"
+                >
+                  <X className="w-4 h-4 text-gray-600" />
+                </button>
+              </div>
             </div>
             <div className="p-4 overflow-y-auto flex-1">
               <div className="space-y-3">
@@ -403,6 +664,18 @@ const QuickActionsOverlay = ({ documentId, documentTitle = 'Document', userId, o
             </div>
           </div>
         </div>
+      )}
+
+      {/* Token Limit Modal */}
+      {tokenLimitData && (
+        <TokenLimitModal
+          isOpen={showTokenLimitModal}
+          onClose={() => {
+            setShowTokenLimitModal(false);
+            setTokenLimitData(null);
+          }}
+          data={tokenLimitData}
+        />
       )}
     </div>
   );

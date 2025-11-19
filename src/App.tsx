@@ -6,15 +6,23 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
 import Profile from './pages/Profile';
+import EditProfile from './pages/EditProfile';
 import DocSathi from './pages/DocSathi';
 import DocSathiChat from './pages/DocSathiChat';
 import AiTutor from './pages/AiTutor';
 import ExamConversations from './pages/ExamConversations';
 import Settings from './pages/Settings';
 import QuizPage from './pages/QuizPage';
+import Analytics from './pages/Analytics';
+import Pricing from './pages/Pricing';
+import Notes from './pages/Notes';
+import AdminDashboard from './pages/AdminDashboard';
+import AdminUsers from './pages/AdminUsers';
+import AdminUserDetail from './pages/AdminUserDetail';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 
+// Main App Component
 function App() {
   return (
     <AuthProvider>
@@ -52,6 +60,16 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <Profile />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/edit-profile"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <EditProfile />
                 </Layout>
               </ProtectedRoute>
             }
@@ -112,7 +130,61 @@ function App() {
               </ProtectedRoute>
             }
           />
-          
+          <Route
+            path="/analytics"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <Analytics />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/pricing"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <Pricing />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/notes"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <Notes />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          {/* Admin routes */}
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute>
+                <AdminDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/users"
+            element={
+              <ProtectedRoute>
+                <AdminUsers />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/users/:userId"
+            element={
+              <ProtectedRoute>
+                <AdminUserDetail />
+              </ProtectedRoute>
+            }
+          />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </Router>

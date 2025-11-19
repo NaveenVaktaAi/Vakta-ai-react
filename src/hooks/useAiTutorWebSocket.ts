@@ -37,7 +37,22 @@ interface PhonemeData {
   weight: number;      // 0.0 to 1.0
 }
 
-export function useAiTutorWebSocket(userId: number) {
+export interface TokenLimitData {
+  message: string;
+  tokensRemaining?: number;
+  service?: string;
+  upgradeRequired?: boolean;
+  tokensNeeded?: number;
+  tokensUsed?: number;
+  tokenLimit?: number;
+  percentageUsed?: number;
+  dailyLimitExceeded?: boolean;
+}
+
+export function useAiTutorWebSocket(
+  userId: number,
+  onTokenLimitExceeded?: (data: TokenLimitData) => void
+) {
   const [messages, setMessages] = useState<TutorMessage[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [thinkingMessage, setThinkingMessage] = useState<string>('');
@@ -48,8 +63,10 @@ export function useAiTutorWebSocket(userId: number) {
   const [isConnected, setIsConnected] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const audioQueueRef = useRef<Array<{url: string, phonemes: PhonemeData[]}>>([]);
+  const audioQueueRef = useRef<Array<{url: string, phonemes: PhonemeData[], id: string}>>([]);
   const isPlayingAudioRef = useRef<boolean>(false);
+  const processedAudioIdsRef = useRef<Set<string>>(new Set()); // Track processed audio chunks to prevent duplicates
+  const processedMessageIdsRef = useRef<Set<string>>(new Set()); // Track processed message IDs to prevent duplicates
 
   // Convert backend phonemes to Unity format (same as NextJS implementation)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -122,11 +139,24 @@ export function useAiTutorWebSocket(userId: number) {
     // Clear audio queue
     audioQueueRef.current = [];
     isPlayingAudioRef.current = false;
+    processedAudioIdsRef.current.clear(); // Clear processed audio IDs on disconnect
+    processedMessageIdsRef.current.clear(); // Clear processed message IDs on disconnect
     setIsConnected(false);
     setConnectionStatus('disconnected');
   }, []);
 
   const connect = useCallback((conversationId: string) => {
+    // ✅ PREVENT MULTIPLE CONNECTIONS: Close existing connection before creating new one
+    if (wsRef.current) {
+      console.log('[AI Tutor] ⚠️ Closing existing WebSocket connection before creating new one');
+      try {
+        wsRef.current.close();
+      } catch (e) {
+        console.warn('[AI Tutor] Error closing existing connection:', e);
+      }
+      wsRef.current = null;
+    }
+    
     const wsUrl = buildTutorWsUrl(conversationId);
     setConnectionStatus('connecting');
     try {
@@ -151,9 +181,30 @@ export function useAiTutorWebSocket(userId: number) {
               break;
               
             case 'user_message_received':
-              // User message confirmation - already added when sent, don't add again
-              console.log('[AI Tutor] User message confirmed:', data.message);
-              // Don't add to messages - already added in sendMessage
+              // User message confirmation or bot message (like token limit warning)
+              console.log('[AI Tutor] Message received:', data.message, 'isBot:', data.isBot);
+              
+              // ✅ If it's a bot message (like token limit warning), add it to chat
+              if (data.isBot && data.type === 'token_limit_warning') {
+                setMessages((prev) => {
+                  const messageId = data.token || `token-warning-${Date.now()}`;
+                  
+                  // Check if message already exists
+                  const exists = prev.some(msg => msg.id === messageId);
+                  if (exists) {
+                    console.log('[AI Tutor] ⏭️ Token warning message already exists');
+                    return prev;
+                  }
+                  
+                  return [...prev, {
+                    role: 'assistant' as const,
+                    content: data.message || '',
+                    id: messageId,
+                    createdAt: data.timestamp || new Date().toISOString()
+                  }];
+                });
+              }
+              // Otherwise, it's just a user message confirmation - already added when sent
               break;
               
             case 'stream_start':
@@ -163,12 +214,33 @@ export function useAiTutorWebSocket(userId: number) {
               setIsTyping(true); // Ensure it's ON
               // Don't set thinking message/status - just show three dots
               // Only show thinking message if backend explicitly sends thinking_indicator
-              // Initialize new message
-              setMessages((prev) => [...prev, { 
-                role: 'assistant', 
-                content: '',
-                id: data.messageId 
-              }]);
+              // Initialize new message with proper ID
+              setMessages((prev) => {
+                const messageId = data.messageId || `stream-${Date.now()}`;
+                
+                // ✅ DUPLICATE PREVENTION: Check if message ID already processed
+                if (processedMessageIdsRef.current.has(messageId)) {
+                  console.log('[AI Tutor] ⏭️ Skipping duplicate stream_start:', messageId);
+                  return prev;
+                }
+                
+                // Check if message already exists in messages array
+                const exists = prev.some(msg => msg.id === messageId);
+                if (exists) {
+                  console.log('[AI Tutor] ⏭️ Message already exists in array:', messageId);
+                  return prev;
+                }
+                
+                // Mark as processed
+                processedMessageIdsRef.current.add(messageId);
+                
+                return [...prev, { 
+                  role: 'assistant' as const, 
+                  content: '',
+                  id: messageId,
+                  createdAt: new Date().toISOString()
+                }];
+              });
               break;
               
             case 'stream_chunk':
@@ -179,14 +251,40 @@ export function useAiTutorWebSocket(userId: number) {
               // Don't set thinking message/status during chunks - just show three dots
               // Only show thinking message if backend explicitly sends thinking_indicator
               setMessages((prev) => {
+                const chunk = data.chunk || '';
+                if (!chunk) {
+                  console.log('[AI Tutor] ⚠️ Empty chunk received, skipping');
+                  return prev; // Don't update if no chunk
+                }
+                
                 const newMessages = [...prev];
                 const lastMsg = newMessages[newMessages.length - 1];
                 if (lastMsg && lastMsg.role === 'assistant') {
                   // Only append if chunk is not already in content (prevent duplication)
-                  const chunk = data.chunk || '';
                   if (!lastMsg.content.endsWith(chunk)) {
-                    lastMsg.content = (lastMsg.content || '') + chunk;
+                    // Create new message object instead of mutating
+                    const updatedContent = (lastMsg.content || '') + chunk;
+                    newMessages[newMessages.length - 1] = {
+                      ...lastMsg,
+                      content: updatedContent
+                    };
+                    // Debug log every 10th chunk to avoid spam
+                    if (updatedContent.length % 50 < chunk.length) {
+                      console.log('[AI Tutor] 📝 Stream chunk added, content length:', updatedContent.length);
+                    }
+                  } else {
+                    console.log('[AI Tutor] ⏭️ Duplicate chunk detected, skipping');
                   }
+                } else {
+                  console.log('[AI Tutor] ⚠️ No assistant message found for chunk, creating new one');
+                  // If no assistant message exists, create one
+                  const messageId = data.messageId || `stream-${Date.now()}`;
+                  newMessages.push({
+                    role: 'assistant' as const,
+                    content: chunk,
+                    id: messageId,
+                    createdAt: new Date().toISOString()
+                  });
                 }
                 return newMessages;
               });
@@ -208,11 +306,24 @@ export function useAiTutorWebSocket(userId: number) {
                   if (lastMsg && lastMsg.role === 'assistant') {
                     // Only replace if fullText is different (prevents unnecessary re-render)
                     if (lastMsg.content !== data.fullText) {
-                      lastMsg.content = data.fullText;
+                      // Create new message object instead of mutating
+                      newMessages[newMessages.length - 1] = {
+                        ...lastMsg,
+                        content: data.fullText
+                      };
                     }
                   }
                   return newMessages;
                 });
+              }
+              // Clear processed audio IDs when stream ends to allow new audio for next message
+              // But keep a small buffer to prevent immediate duplicates
+              if (processedAudioIdsRef.current.size > 100) {
+                processedAudioIdsRef.current.clear();
+              }
+              // Clear processed message IDs periodically (keep last 50 to prevent immediate duplicates)
+              if (processedMessageIdsRef.current.size > 50) {
+                processedMessageIdsRef.current.clear();
               }
               break;
               
@@ -242,6 +353,34 @@ export function useAiTutorWebSocket(userId: number) {
               setThinkingMessage(data.message || 'Processing...');
               setThinkingStatus(data.status || 'thinking');
               console.log('[AI Tutor] Set state - isTyping: true, message:', data.message, 'status:', data.status);
+              break;
+              
+            case 'token_limit_exceeded':
+              // ✅ Token limit exceeded - show popup modal only if upgrade required
+              console.log('[AI Tutor] Token limit exceeded:', data);
+              const tokenData: TokenLimitData = {
+                message: data.message || 'Your free trial credits are running low.',
+                tokensRemaining: data.tokensRemaining,
+                service: data.service || 'aiTutor',
+                upgradeRequired: data.upgradeRequired !== false,
+                tokensNeeded: data.tokensNeeded,
+                tokensUsed: data.tokensUsed,
+                tokenLimit: data.tokenLimit,
+                percentageUsed: data.percentageUsed,
+                dailyLimitExceeded: data.dailyLimitExceeded
+              };
+              
+              setIsTyping(false);
+              setIsStreaming(false);
+              setThinkingMessage('');
+              setThinkingStatus('');
+              
+              // ✅ Only call callback (which shows modal) if upgrade is required
+              // Show modal only if: upgradeRequired is true AND dailyLimitExceeded is not true
+              // Don't show modal for premium users (upgradeRequired=false) or daily quota exceeded
+              if (onTokenLimitExceeded && (data.upgradeRequired === true && data.dailyLimitExceeded !== true)) {
+                onTokenLimitExceeded(tokenData);
+              }
               break;
               
             case 'error':
@@ -287,11 +426,31 @@ export function useAiTutorWebSocket(userId: number) {
             case 'audio_chunk': {
               // Handle audio chunk with phonemes for Unity avatar
               console.log('[AI Tutor] 🎵 ==================== AUDIO RECEIVED ====================');
+              
+              // Create unique audio ID to prevent duplicates
+              // Use backend's messageId and chunkIndex if available, otherwise generate unique ID
+              const messageId = data?.messageId || data?.conversationId || `msg-${Date.now()}`;
+              const chunkIndex = data?.chunkIndex ?? 0;
+              const audioUrlForId = data?.audioUrl || data?.audioFile || '';
+              // Create unique ID: messageId + chunkIndex + audioUrl filename (to catch duplicates even if indices are same)
+              const audioFilename = audioUrlForId ? audioUrlForId.substring(audioUrlForId.lastIndexOf('/') + 1) : 'audio';
+              const audioId = `${messageId}-chunk-${chunkIndex}-${audioFilename}`;
+              
+              // ✅ DUPLICATE PREVENTION: Skip if already processed
+              if (processedAudioIdsRef.current.has(audioId)) {
+                console.log('[AI Tutor] ⏭️ Skipping duplicate audio chunk:', audioId);
+                break;
+              }
+              
+              // Mark as processed
+              processedAudioIdsRef.current.add(audioId);
+              
               console.log('[AI Tutor] 🎵 Raw backend data:', {
+                audioId: audioId,
                 audioUrl: data?.audioUrl,
                 phonemeCount: data?.phonemes?.length || 0,
                 text: data?.text,
-                firstPhoneme: data?.phonemes?.[0],
+                chunkIndex: chunkIndex,
                 is_compressed: data?.is_compressed
               });
               
@@ -301,10 +460,6 @@ export function useAiTutorWebSocket(userId: number) {
               
               console.log('[AI Tutor] 🎭 Backend phonemes:', backendPhonemes.length);
               console.log('[AI Tutor] 🎭 Unity phonemes:', unityPhonemes.length);
-              if (unityPhonemes.length > 0) {
-                console.log('[AI Tutor] 🎭 First Unity phoneme:', unityPhonemes[0]);
-                console.log('[AI Tutor] 🎭 Last Unity phoneme:', unityPhonemes[unityPhonemes.length - 1]);
-              }
               
               // Prepare audio URL - Use backend URL for audio files
               let audioUrl = null;
@@ -331,6 +486,30 @@ export function useAiTutorWebSocket(userId: number) {
                 const compressionMetadata = extractCompressionMetadata(data);
                 const isCompressed = compressionMetadata.is_compressed || isCompressedAudioUrl(audioUrl);
                 
+                // Function to send audio to Unity (used for both compressed and uncompressed)
+                const sendAudioToUnity = (finalAudioUrl: string, finalPhonemes: PhonemeData[]) => {
+                  // Only send to the first/active iframe to prevent duplicates
+                  const iframe = document.querySelector('iframe[src*="/WebGL/index.html"]') as HTMLIFrameElement;
+                  if (iframe?.contentWindow) {
+                    iframe.contentWindow.postMessage({
+                      type: 'PLAY_TTS_WITH_PHONEMES',
+                      payload: {
+                        audioUrl: finalAudioUrl,
+                        audioData: null,
+                        phonemes: finalPhonemes,
+                        id: audioId // Use unique ID to prevent Unity from playing duplicates
+                      }
+                    }, '*');
+                    console.log('[AI Tutor] ✅ Sent audio to Unity:', {
+                      audioId: audioId,
+                      audioUrl: finalAudioUrl,
+                      phonemesCount: finalPhonemes.length
+                    });
+                  } else {
+                    console.warn('[AI Tutor] ⚠️ No Unity iframe found');
+                  }
+                };
+                
                 if (isCompressed) {
                   console.log('[AI Tutor] 🗜️ Compressed audio detected, decompressing...');
                   
@@ -340,68 +519,21 @@ export function useAiTutorWebSocket(userId: number) {
                       // Create blob URL from decompressed audio
                       const blobUrl = URL.createObjectURL(decompressedBlob);
                       console.log('[AI Tutor] ✅ Audio decompressed and ready:', blobUrl);
-                      
-                      // Send decompressed audio to Unity
-                      const iframes = document.querySelectorAll('iframe[src*="/WebGL/index.html"]') as NodeListOf<HTMLIFrameElement>;
-                      iframes.forEach((iframe) => {
-                        if (iframe?.contentWindow) {
-                          iframe.contentWindow.postMessage({
-                            type: 'PLAY_TTS_WITH_PHONEMES',
-                            payload: {
-                              audioUrl: blobUrl,
-                              audioData: null, // Use blob URL instead of base64
-                              phonemes: unityPhonemes,
-                              id: `audio-${Date.now()}`
-                            }
-                          }, '*');
-                          console.log('[AI Tutor] ✅ Sent decompressed audio to Unity:', {
-                            blobUrl: blobUrl,
-                            phonemesCount: unityPhonemes.length
-                          });
-                        }
-                      });
+                      sendAudioToUnity(blobUrl, unityPhonemes);
                     })
                     .catch((error) => {
                       console.error('[AI Tutor] ❌ Error decompressing audio:', error);
                       // Fallback: try sending original URL
-                      const iframes = document.querySelectorAll('iframe[src*="/WebGL/index.html"]') as NodeListOf<HTMLIFrameElement>;
-                      iframes.forEach((iframe) => {
-                        if (iframe?.contentWindow) {
-                          iframe.contentWindow.postMessage({
-                            type: 'PLAY_TTS_WITH_PHONEMES',
-                            payload: {
-                              audioUrl: audioUrl,
-                              phonemes: unityPhonemes,
-                              id: `audio-${Date.now()}`
-                            }
-                          }, '*');
-                        }
-                      });
+                      sendAudioToUnity(audioUrl, unityPhonemes);
                     });
                 } else {
                   // Not compressed, send directly to Unity
                   console.log('[AI Tutor] 🎵 Sending uncompressed audio to Unity');
-                const iframes = document.querySelectorAll('iframe[src*="/WebGL/index.html"]') as NodeListOf<HTMLIFrameElement>;
-                iframes.forEach((iframe) => {
-                  if (iframe?.contentWindow) {
-                    iframe.contentWindow.postMessage({
-                      type: 'PLAY_TTS_WITH_PHONEMES',
-                      payload: {
-                        audioUrl: audioUrl,
-                        phonemes: unityPhonemes,
-                        id: `audio-${Date.now()}`
-                      }
-                    }, '*');
-                    console.log('[AI Tutor] ✅ Sent to Unity seamless queue:', {
-                      audioUrl: audioUrl,
-                      phonemesCount: unityPhonemes.length
-                    });
-                  }
-                });
+                  sendAudioToUnity(audioUrl, unityPhonemes);
                 }
               } else {
                 console.warn('[AI Tutor] ⚠️ Skipping audio - no phonemes or URL');
-            }
+              }
               break;
             }
               
@@ -415,18 +547,45 @@ export function useAiTutorWebSocket(userId: number) {
               
             default:
               // Fallback: if it's a string, treat as assistant message
+              // ✅ DUPLICATE PREVENTION: Check if message already exists before adding
               if (typeof data === 'string') {
-            setMessages((prev) => [...prev, { role: 'assistant', content: data }]);
+                setMessages((prev) => {
+                  const lastMsg = prev[prev.length - 1];
+                  // Don't add if last message is the same (prevents duplicate)
+                  if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === data) {
+                    console.log('[AI Tutor] ⏭️ Skipping duplicate assistant message (string)');
+                    return prev;
+                  }
+                  return [...prev, { role: 'assistant', content: data }];
+                });
               } else if (data?.message && !messageType) {
                 // Unknown format but has message field
-                setMessages((prev) => [...prev, { role: 'assistant', content: String(data.message) }]);
+                const messageText = String(data.message);
+                setMessages((prev) => {
+                  const lastMsg = prev[prev.length - 1];
+                  // Don't add if last message is the same (prevents duplicate)
+                  if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === messageText) {
+                    console.log('[AI Tutor] ⏭️ Skipping duplicate assistant message (data.message)');
+                    return prev;
+                  }
+                  return [...prev, { role: 'assistant', content: messageText }];
+                });
               }
           }
         } catch (e) {
           console.error('[AI Tutor] Error parsing message:', e);
           // Non-JSON fallbacks
+          // ✅ DUPLICATE PREVENTION: Check if message already exists before adding
           if (typeof event.data === 'string') {
-            setMessages((prev) => [...prev, { role: 'assistant', content: event.data }]);
+            setMessages((prev) => {
+              const lastMsg = prev[prev.length - 1];
+              // Don't add if last message is the same (prevents duplicate)
+              if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === event.data) {
+                console.log('[AI Tutor] ⏭️ Skipping duplicate assistant message (fallback)');
+                return prev;
+              }
+              return [...prev, { role: 'assistant', content: event.data }];
+            });
           }
         }
       };
@@ -459,8 +618,8 @@ export function useAiTutorWebSocket(userId: number) {
       exam_name: examType,  // Set exam_name same as exam_type
       subject, 
       topic, 
-      tags,  // Include tags
-      user_id: userId 
+      tags  // Include tags
+      // user_id removed - backend gets it from authentication middleware
     });
     if (res?.success && res?.data?.conversation_id) {
       const id = res.data.conversation_id;
@@ -596,7 +755,7 @@ export function useAiTutorWebSocket(userId: number) {
       message: trimmedText || defaultMessage,
       content: trimmedText || defaultMessage, // Also include content field for compatibility
       timestamp: new Date().toISOString(),
-      userId: userId.toString(), // Ensure userId is string
+      // userId removed - backend gets it from conversation document (secure)
       timezone: opts?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
       languageCode: opts?.languageCode || 'en',
       is_audio: opts?.isAudio ?? false, // Use is_audio (backend supports both but prefers is_audio)

@@ -179,6 +179,8 @@ const Signup = () => {
       await signup(signupData);
       
       console.log('✅ Signup successful, redirecting to dashboard');
+      // Set flag to show "Welcome" instead of "Welcome back" on dashboard
+      localStorage.setItem('isNewSignup', 'true');
       toast.success('🎉 Account created successfully! Welcome to Vakta AI!');
       setTimeout(() => {
         navigate('/dashboard');
@@ -361,6 +363,7 @@ const Signup = () => {
                       <option value="10">Class 10</option>
                       <option value="11">Class 11</option>
                       <option value="12">Class 12</option>
+                      <option value="12+">12+</option>
                     </select>
                   </div>
 

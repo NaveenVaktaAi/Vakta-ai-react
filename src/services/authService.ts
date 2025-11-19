@@ -136,5 +136,22 @@ export const authService = {
     const userStr = localStorage.getItem('user');
     return userStr ? JSON.parse(userStr) : null;
   },
+
+  // Update user profile
+  updateUserProfile: async (data: { full_name?: string; email?: string }): Promise<any> => {
+    const response = await api.put('/auth/me', data);
+    return response.data;
+  },
+
+  // Update student profile
+  updateStudentProfile: async (data: { 
+    current_class?: string; 
+    exam_target?: string; 
+    board?: string;
+    preferred_language?: string;
+  }): Promise<any> => {
+    const response = await api.put('/auth/student-profile', data);
+    return response.data;
+  },
 };
 

@@ -1,62 +1,172 @@
+import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { GraduationCap, Target, BookOpen, Brain, TrendingUp, Award, Clock, Users } from 'lucide-react';
+import { GraduationCap, Target, BookOpen, Brain, TrendingUp, Award, Clock, Users, FileText, Shield, UserCheck, Crown, DollarSign } from 'lucide-react';
+import api from '../services/api';
+import { aiTutorService } from '../services/aiTutorService';
 
 const Dashboard = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [examTarget, setExamTarget] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [adminStats, setAdminStats] = useState<any>(null);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [isNewSignup, setIsNewSignup] = useState(false);
 
-  const stats = [
-    { label: 'JEE Aspirants', value: '10K+', icon: Target, color: 'bg-blue-500' },
-    { label: 'NEET Aspirants', value: '5K+', icon: Users, color: 'bg-green-500' },
-    { label: 'Study Materials', value: '50K+', icon: BookOpen, color: 'bg-purple-500' },
-    { label: 'AI Sessions', value: '1M+', icon: Brain, color: 'bg-orange-500' },
-  ];
+  const loadAdminStats = async () => {
+    try {
+      setAdminLoading(true);
+      const response = await api.get('/admin/dashboard');
+      if (response.data) {
+        setAdminStats(response.data);
+      }
+    } catch (err: any) {
+      console.error('Error loading admin stats:', err);
+    } finally {
+      setAdminLoading(false);
+    }
+  };
 
-  const features = [
-    {
-      title: 'IIT JEE Preparation',
-      description: 'Comprehensive syllabus coverage, practice tests, and AI-powered doubt solving',
-      icon: Target,
-      color: 'from-blue-500 to-blue-600',
-      subjects: ['Physics', 'Chemistry', 'Mathematics']
-    },
-    {
-      title: 'NEET Preparation',
-      description: 'Biology, Physics, Chemistry masterclasses with expert tutors',
-      icon: Award,
-      color: 'from-green-500 to-green-600',
-      subjects: ['Biology', 'Physics', 'Chemistry']
-    },
-    {
-      title: 'School Level',
-      description: 'Class 6-12 preparation for CBSE, ICSE, State Boards',
-      icon: GraduationCap,
-      color: 'from-purple-500 to-purple-600',
-      subjects: ['All Subjects', 'Board Exams', 'Foundation']
-    },
-    {
-      title: 'AI-Powered Learning',
-      description: 'Personalized study plans, instant doubt solving, and progress tracking',
-      icon: Brain,
-      color: 'from-orange-500 to-orange-600',
-      subjects: ['24/7 Tutor', 'Smart Practice', 'Analytics']
-    },
-  ];
+  // ✅ Check if this is a new signup
+  useEffect(() => {
+    const newSignupFlag = localStorage.getItem('isNewSignup');
+    if (newSignupFlag === 'true') {
+      setIsNewSignup(true);
+      // Clear the flag after reading it
+      localStorage.removeItem('isNewSignup');
+    }
+  }, []);
+
+  // ✅ Fetch student exam info on mount
+  useEffect(() => {
+    const fetchStudentExamInfo = async () => {
+      try {
+        if (user?.role === 'student') {
+          const response = await aiTutorService.getStudentExamInfo();
+          if (response.success && response.data) {
+            setExamTarget(response.data.exam_target);
+            console.log('[Dashboard] Student exam target loaded:', response.data.exam_target);
+          }
+        }
+      } catch (error) {
+        console.error('[Dashboard] Failed to load student exam info:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchStudentExamInfo();
+    
+    // Load admin stats if user is admin
+    if (user?.role?.toLowerCase() === 'admin') {
+      loadAdminStats();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  // ✅ Filter stats based on exam target
+  const getFilteredStats = () => {
+    const allStats = [
+      { label: 'JEE Aspirants', value: '10K+', icon: Target, color: 'bg-blue-500', examTarget: 'jee' },
+      { label: 'NEET Aspirants', value: '5K+', icon: Users, color: 'bg-green-500', examTarget: 'neet' },
+      { label: 'Study Materials', value: '50K+', icon: BookOpen, color: 'bg-purple-500', examTarget: null },
+      { label: 'AI Sessions', value: '1M+', icon: Brain, color: 'bg-orange-500', examTarget: null },
+    ];
+
+    if (!examTarget) {
+      return allStats; // Show all if no exam target
+    }
+
+    // Filter: show only relevant stat + general stats
+    return allStats.filter(stat => 
+      stat.examTarget === null || stat.examTarget === examTarget.toLowerCase()
+    );
+  };
+
+  // ✅ Filter features based on exam target
+  const getFilteredFeatures = () => {
+    const allFeatures = [
+      {
+        title: 'IIT JEE Preparation',
+        description: 'Comprehensive syllabus coverage, practice tests, and AI-powered doubt solving',
+        icon: Target,
+        color: 'from-blue-500 to-blue-600',
+        subjects: ['Physics', 'Chemistry', 'Mathematics'],
+        examTarget: 'jee'
+      },
+      {
+        title: 'NEET Preparation',
+        description: 'Biology, Physics, Chemistry masterclasses with expert tutors',
+        icon: Award,
+        color: 'from-green-500 to-green-600',
+        subjects: ['Biology', 'Physics', 'Chemistry'],
+        examTarget: 'neet'
+      },
+      {
+        title: 'School Level',
+        description: 'Class 6-12 preparation for CBSE, ICSE, State Boards',
+        icon: GraduationCap,
+        color: 'from-purple-500 to-purple-600',
+        subjects: ['All Subjects', 'Board Exams', 'Foundation'],
+        examTarget: 'boards'
+      },
+      {
+        title: 'DocSathi',
+        description: 'AI-powered document intelligence - chat with your documents, generate summaries, notes, and quizzes',
+        icon: FileText,
+        color: 'from-orange-500 to-orange-600',
+        subjects: ['Document Chat', 'Smart Summaries', 'Quiz Generation'],
+        examTarget: null // Always show
+      },
+    ];
+
+    if (!examTarget) {
+      return allFeatures; // Show all if no exam target
+    }
+
+    const examTargetLower = examTarget.toLowerCase();
+    
+    // Filter: show only relevant exam preparation + AI-Powered Learning
+    return allFeatures.filter(feature => 
+      feature.examTarget === null || feature.examTarget === examTargetLower
+    );
+  };
+
+  const stats = getFilteredStats();
+  const features = getFilteredFeatures();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 pt-4 lg:pt-0">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       <div className="p-4 sm:p-6 lg:p-8">
         {/* Welcome Section */}
-        <div className="mb-6 sm:mb-8">
+        <div className="mb-6 sm:mb-8 mt-2 sm:mt-0">
           <div className="bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl p-4 sm:p-6 lg:p-8 text-white shadow-xl">
             <div className="flex items-center justify-between">
               <div className="flex-1">
                 <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2">
-                  Welcome back, {user?.full_name?.split(' ')[0]}! 👋
+                  {isNewSignup ? (
+                    <>Welcome, {user?.full_name?.split(' ')[0]}! 🎉</>
+                  ) : (
+                    <>Welcome back, {user?.full_name?.split(' ')[0]}! 👋</>
+                  )}
                 </h1>
                 <p className="text-blue-100 text-sm sm:text-base lg:text-lg">
-                  Your personalized learning journey starts here
+                  {isNewSignup 
+                    ? "We're excited to have you here! Let's start your learning journey."
+                    : "Your personalized learning journey starts here"
+                  }
                 </p>
               </div>
               <div className="hidden md:block flex-shrink-0 ml-4">
@@ -71,6 +181,79 @@ const Dashboard = () => {
             </div>
           </div>
         </div>
+
+        {/* Admin User Management Section */}
+        {user?.role?.toLowerCase() === 'admin' && (
+          <div className="mb-6 sm:mb-8">
+            <div className="bg-gradient-to-r from-red-600 to-orange-600 rounded-2xl p-4 sm:p-6 lg:p-8 text-white shadow-xl">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center backdrop-blur-sm">
+                    <Shield className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl sm:text-3xl font-bold">Admin Panel</h2>
+                    <p className="text-white/90 text-sm sm:text-base">Manage users and subscriptions</p>
+                  </div>
+                </div>
+              </div>
+
+              {adminLoading ? (
+                <div className="text-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
+                </div>
+              ) : adminStats ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Users className="w-5 h-5" />
+                      <span className="text-sm text-white/80">Total Users</span>
+                    </div>
+                    <p className="text-2xl font-bold">{adminStats.user_stats?.total_users || 0}</p>
+                  </div>
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Crown className="w-5 h-5" />
+                      <span className="text-sm text-white/80">Premium</span>
+                    </div>
+                    <p className="text-2xl font-bold">{adminStats.user_stats?.premium_users || 0}</p>
+                  </div>
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
+                    <div className="flex items-center gap-2 mb-2">
+                      <UserCheck className="w-5 h-5" />
+                      <span className="text-sm text-white/80">Active</span>
+                    </div>
+                    <p className="text-2xl font-bold">{adminStats.user_stats?.active_users || 0}</p>
+                  </div>
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
+                    <div className="flex items-center gap-2 mb-2">
+                      <DollarSign className="w-5 h-5" />
+                      <span className="text-sm text-white/80">Revenue</span>
+                    </div>
+                    <p className="text-2xl font-bold">₹{adminStats.subscription_stats?.monthly_revenue?.toLocaleString() || 0}</p>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={() => navigate('/admin')}
+                  className="px-6 py-3 bg-white text-red-600 rounded-lg font-semibold hover:bg-gray-100 transition-colors flex items-center gap-2"
+                >
+                  <Shield className="w-5 h-5" />
+                  Admin Dashboard
+                </button>
+                <button
+                  onClick={() => navigate('/admin/users')}
+                  className="px-6 py-3 bg-white/20 backdrop-blur-sm text-white rounded-lg font-semibold hover:bg-white/30 transition-colors border border-white/30 flex items-center gap-2"
+                >
+                  <Users className="w-5 h-5" />
+                  Manage Users
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Stats Grid */}
         <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:gap-6 mb-6 sm:mb-8">
@@ -122,6 +305,8 @@ const Dashboard = () => {
                         navigate(`/exam-conversations/${encodeURIComponent('IIT JEE')}`);
                       } else if (feature.title === 'NEET Preparation') {
                         navigate(`/exam-conversations/${encodeURIComponent('NEET')}`);
+                      } else if (feature.title === 'DocSathi') {
+                        navigate('/docsathi');
                       } else {
                         navigate('/ai-tutor');
                       }
@@ -163,7 +348,10 @@ const Dashboard = () => {
                 <p className="text-xs sm:text-sm text-gray-500">Get instant help</p>
               </div>
             </div>
-            <button className="w-full py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium transition-colors">
+            <button 
+              onClick={() => navigate('/ai-tutor')}
+              className="w-full py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium transition-colors"
+            >
               Chat Now
             </button>
           </div>
@@ -178,7 +366,10 @@ const Dashboard = () => {
                 <p className="text-xs sm:text-sm text-gray-500">Track your journey</p>
               </div>
             </div>
-            <button className="w-full py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium transition-colors">
+            <button 
+              onClick={() => navigate('/analytics')}
+              className="w-full py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium transition-colors"
+            >
               View Analytics
             </button>
           </div>

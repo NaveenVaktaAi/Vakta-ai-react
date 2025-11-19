@@ -9,6 +9,18 @@ export interface Message {
   metadata?: Record<string, unknown>;
 }
 
+export interface TokenLimitData {
+  message: string;
+  tokensRemaining?: number;
+  service?: string;
+  upgradeRequired?: boolean;
+  tokensNeeded?: number;
+  tokensUsed?: number;
+  tokenLimit?: number;
+  percentageUsed?: number;
+  dailyLimitExceeded?: boolean;
+}
+
 interface SendMessageOptions {
   useWebSearch?: boolean;
 }
@@ -27,12 +39,16 @@ interface UseChatWebSocketReturn {
   currentChatId: string | null;
   createNewChat: (onChatCreated?: (chatId: string | null) => void) => Promise<string | null>;
   loadChatMessages: (chatId: string) => Promise<void>;
+  tokenLimitData: TokenLimitData | null;
+  showTokenLimitModal: boolean;
+  closeTokenLimitModal: () => void;
 }
 
 export function useChatWebSocket(
   userId: number = 1,
   documentId?: string | null,
-  initialChatId?: string | null
+  initialChatId?: string | null,
+  onTokenLimitExceeded?: (data: TokenLimitData) => void
 ): UseChatWebSocketReturn {
   const [isConnected, setIsConnected] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
@@ -50,6 +66,8 @@ export function useChatWebSocket(
   const [isMockMode, setIsMockMode] = useState(false);
   const [currentChatId, setCurrentChatId] = useState<string | null>(initialChatId || null);
   const [isCreatingChat, setIsCreatingChat] = useState(false);
+  const [tokenLimitData, setTokenLimitData] = useState<TokenLimitData | null>(null);
+  const [showTokenLimitModal, setShowTokenLimitModal] = useState(false);
   const hasAttemptedConnect = useRef<string | null>(null);
   const processedMessageIds = useRef<Set<string>>(new Set());
   const isLoadingMessagesRef = useRef(false);
@@ -289,6 +307,34 @@ export function useChatWebSocket(
             // Error message
             setIsTyping(false);
             console.error('[Chat] Backend error:', data.message);
+          } else if (data.mt === 'token_limit_exceeded') {
+            // ✅ Token limit exceeded - show popup modal only if upgrade required
+            setIsTyping(false);
+            console.log('[Chat] Token limit exceeded:', data);
+            const tokenData: TokenLimitData = {
+              message: data.message || 'Your free trial credits are running low.',
+              tokensRemaining: data.tokensRemaining,
+              service: data.service,
+              upgradeRequired: data.upgradeRequired,
+              tokensNeeded: data.tokensNeeded,
+              tokensUsed: data.tokensUsed,
+              tokenLimit: data.tokenLimit,
+              percentageUsed: data.percentageUsed,
+              dailyLimitExceeded: data.dailyLimitExceeded
+            };
+            setTokenLimitData(tokenData);
+            
+            // ✅ Only show modal if upgrade is required (not for premium users with daily quota)
+            // Show modal only if: upgradeRequired is true AND dailyLimitExceeded is not true
+            // Don't show modal for premium users (upgradeRequired=false) or daily quota exceeded
+            if (data.upgradeRequired === true && data.dailyLimitExceeded !== true) {
+              setShowTokenLimitModal(true);
+            }
+            
+            // ✅ Call callback if provided (for parent component handling)
+            if (onTokenLimitExceeded) {
+              onTokenLimitExceeded(tokenData);
+            }
           }
         } catch (error) {
           console.error('[Chat] Error parsing message:', error);
@@ -547,6 +593,11 @@ export function useChatWebSocket(
     };
   }, []);
 
+  const closeTokenLimitModal = useCallback(() => {
+    setShowTokenLimitModal(false);
+    setTokenLimitData(null);
+  }, []);
+
   return {
     isConnected,
     sendMessage,
@@ -561,6 +612,9 @@ export function useChatWebSocket(
     currentChatId,
     createNewChat,
     loadChatMessages,
+    tokenLimitData,
+    showTokenLimitModal,
+    closeTokenLimitModal,
   };
 }
 

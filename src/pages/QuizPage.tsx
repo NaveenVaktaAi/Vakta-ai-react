@@ -97,12 +97,35 @@ const QuizPage = () => {
     }
   };
 
-  const handleAnswerSelect = (questionId: string, answer: string) => {
+  const handleAnswerSelect = (questionId: string, answer: string, optionIndex?: number) => {
     if (isReviewMode) return; // Don't allow changes in review mode
+    
+    const question = quizData?.questions.find(q => q.question_id === questionId);
+    let selectedAnswer = answer;
+    
+    // For MCQ questions: convert to letter (A, B, C, D)
+    // For True/False questions: keep as "True" or "False"
+    if (question && question.question_type === 'mcq') {
+      if (optionIndex !== undefined) {
+        // Convert index to letter: 0 -> A, 1 -> B, 2 -> C, 3 -> D
+        selectedAnswer = String.fromCharCode(65 + optionIndex); // 65 is 'A' in ASCII
+      } else {
+        // If answer is the full text, find its index in options
+        if (question.options) {
+          const index = question.options.indexOf(answer);
+          if (index !== -1) {
+            selectedAnswer = String.fromCharCode(65 + index); // Convert to A, B, C, D
+          }
+        }
+      }
+    } else if (question && question.question_type === 'true_false') {
+      // For true/false, keep the answer as "True" or "False"
+      selectedAnswer = answer; // Already "True" or "False"
+    }
     
     setAnswers(prev => ({
       ...prev,
-      [questionId]: answer
+      [questionId]: selectedAnswer
     }));
   };
 
@@ -212,16 +235,21 @@ const QuizPage = () => {
     return answers[question.question_id] ? 'answered' : 'unanswered';
   };
 
-  const getOptionStyle = (question: QuizQuestion, option: string) => {
+  const getOptionStyle = (question: QuizQuestion, option: string, optionIndex: number) => {
+    // For MCQ: use letter (A, B, C, D), for True/False: use option text directly
+    const comparisonValue = question.question_type === 'mcq' 
+      ? String.fromCharCode(65 + optionIndex) // A, B, C, D
+      : option; // "True" or "False"
+    
     if (!isReviewMode && !isSubmitted) {
-      return answers[question.question_id] === option 
+      return answers[question.question_id] === comparisonValue 
         ? "border-blue-500 bg-blue-50 text-blue-900" 
         : "border-gray-200 hover:border-gray-300 text-gray-900";
     }
 
-    // Review mode styles
-    const isCorrect = option === question.correct_answer;
-    const isStudentAnswer = option === question.student_answer;
+    // Review mode styles - compare using appropriate format
+    const isCorrect = comparisonValue === question.correct_answer;
+    const isStudentAnswer = comparisonValue === question.student_answer;
     
     if (isCorrect && isStudentAnswer) {
       return "border-green-500 bg-green-50 text-green-900";
@@ -432,23 +460,42 @@ const QuizPage = () => {
                 {currentQuestion.options.map((option, index) => (
                   <button
                     key={index}
-                    onClick={() => handleAnswerSelect(currentQuestion.question_id, option)}
+                    onClick={() => handleAnswerSelect(currentQuestion.question_id, option, index)}
                     disabled={isReviewMode || isSubmitted}
                     className={`w-full p-5 text-left border-2 rounded-xl transition-all duration-300 hover:scale-[1.02] ${
-                      getOptionStyle(currentQuestion, option)
+                      getOptionStyle(currentQuestion, option, index)
                     } ${(isReviewMode || isSubmitted) ? 'cursor-default' : 'cursor-pointer shadow-sm hover:shadow-md'}`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-medium text-gray-900">{option}</span>
+                      <div className="flex items-center gap-3">
+                        {currentQuestion.question_type === 'mcq' && (
+                          <span className="font-bold text-blue-600 w-6 h-6 flex items-center justify-center bg-blue-50 rounded-full text-sm">
+                            {String.fromCharCode(65 + index)}
+                          </span>
+                        )}
+                        <span className="font-medium text-gray-900">{option}</span>
+                      </div>
                       {(isReviewMode || isSubmitted) && (
                         <div className="flex items-center gap-2">
-                          {option === currentQuestion.correct_answer && (
+                          {(currentQuestion.question_type === 'mcq' 
+                            ? String.fromCharCode(65 + index) 
+                            : option) === currentQuestion.correct_answer && (
                             <span className="text-green-600 text-sm font-medium">✓ Correct Answer</span>
                           )}
-                          {option === currentQuestion.student_answer && option !== currentQuestion.correct_answer && (
+                          {(currentQuestion.question_type === 'mcq' 
+                            ? String.fromCharCode(65 + index) 
+                            : option) === currentQuestion.student_answer && 
+                           (currentQuestion.question_type === 'mcq' 
+                            ? String.fromCharCode(65 + index) 
+                            : option) !== currentQuestion.correct_answer && (
                             <span className="text-red-600 text-sm font-medium">✗ Your Answer</span>
                           )}
-                          {option === currentQuestion.student_answer && option === currentQuestion.correct_answer && (
+                          {(currentQuestion.question_type === 'mcq' 
+                            ? String.fromCharCode(65 + index) 
+                            : option) === currentQuestion.student_answer && 
+                           (currentQuestion.question_type === 'mcq' 
+                            ? String.fromCharCode(65 + index) 
+                            : option) === currentQuestion.correct_answer && (
                             <span className="text-green-600 text-sm font-medium">✓ Your Answer</span>
                           )}
                         </div>

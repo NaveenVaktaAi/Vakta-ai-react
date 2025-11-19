@@ -510,9 +510,28 @@
       var audioQueue = [];
       var isPlayingAudio = false;
       var currentAudioBlobUrl = null;
+      var processedAudioIds = new Set(); // Track processed audio IDs to prevent duplicates
       
       function playHtmlAudioFallback(audioDataOrUrl, audioId, phonemes) {
         console.log('[Unity] 🎵 Received audio chunk:', audioId);
+        
+        // ✅ DUPLICATE PREVENTION: Skip if already processed or in queue
+        if (processedAudioIds.has(audioId)) {
+          console.log('[Unity] ⏭️ Skipping duplicate audio chunk:', audioId);
+          return;
+        }
+        
+        // Check if already in queue
+        var alreadyInQueue = audioQueue.some(function(chunk) {
+          return chunk.audioId === audioId;
+        });
+        if (alreadyInQueue) {
+          console.log('[Unity] ⏭️ Audio already in queue, skipping:', audioId);
+          return;
+        }
+        
+        // Mark as processed
+        processedAudioIds.add(audioId);
         
         // ✅ Add to queue for seamless continuous playback
         audioQueue.push({
@@ -615,6 +634,13 @@
         // ✅ CRITICAL: Seamless transition - when current audio ends, immediately play next
         audioElement.onended = function() {
           console.log('[Unity] ✅ Audio playback completed:', audioId);
+          
+          // Clean up processed IDs periodically to prevent memory issues
+          // But keep a limit to prevent immediate duplicates
+          if (processedAudioIds.size > 100) {
+            processedAudioIds.clear();
+            console.log('[Unity] 🧹 Cleared processed audio IDs (memory management)');
+          }
           
           // Clean up blob URL if created
           if (currentAudioBlobUrl && currentAudioBlobUrl.startsWith('blob:')) {

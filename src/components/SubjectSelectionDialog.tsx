@@ -6,12 +6,14 @@ interface SubjectSelectionDialogProps {
   onConfirm: (examType: string, subject: string, topic: string) => void;
   skipExamStep?: boolean; // If true, skip exam selection and start with subject
   defaultExamType?: string; // Default exam type when skipping exam step
+  examTarget?: string | null; // exam_target from student profile (e.g., "jee", "neet")
 }
 
 // Exam Types
 const examTypes = [
   { value: "IIT JEE", emoji: "🎓", color: "from-blue-500 to-indigo-600", description: "Engineering Entrance" },
   { value: "NEET", emoji: "🏥", color: "from-green-500 to-emerald-600", description: "Medical Entrance" },
+  { value: "School Level", emoji: "🏫", color: "from-orange-500 to-red-600", description: "Class 6-12 Preparation" },
   { value: "General Conversation", emoji: "💬", color: "from-purple-500 to-pink-600", description: "General Learning" },
 ];
 
@@ -26,6 +28,34 @@ const subjectsByExam: Record<string, Array<{ value: string; emoji: string; color
     { value: "Physics", emoji: "⚛️", color: "from-purple-500 to-pink-500" },
     { value: "Chemistry", emoji: "🧪", color: "from-green-500 to-teal-500" },
     { value: "Biology", emoji: "🧬", color: "from-emerald-500 to-lime-500" },
+  ],
+  // For JEE (exam_target: "jee"), show only PCM
+  "jee": [
+    { value: "Mathematics", emoji: "📐", color: "from-blue-500 to-cyan-500" },
+    { value: "Physics", emoji: "⚛️", color: "from-purple-500 to-pink-500" },
+    { value: "Chemistry", emoji: "🧪", color: "from-green-500 to-teal-500" },
+  ],
+  // For NEET (exam_target: "neet"), show only PCB
+  "neet": [
+    { value: "Physics", emoji: "⚛️", color: "from-purple-500 to-pink-500" },
+    { value: "Chemistry", emoji: "🧪", color: "from-green-500 to-teal-500" },
+    { value: "Biology", emoji: "🧬", color: "from-emerald-500 to-lime-500" },
+  ],
+  "School Level": [
+    { value: "Mathematics", emoji: "📐", color: "from-blue-500 to-cyan-500" },
+    { value: "Science", emoji: "🔬", color: "from-purple-500 to-pink-500" },
+    { value: "Physics", emoji: "⚛️", color: "from-indigo-500 to-blue-500" },
+    { value: "Chemistry", emoji: "🧪", color: "from-green-500 to-teal-500" },
+    { value: "Biology", emoji: "🧬", color: "from-emerald-500 to-lime-500" },
+    { value: "English", emoji: "📚", color: "from-orange-500 to-red-500" },
+    { value: "Hindi", emoji: "📖", color: "from-amber-500 to-yellow-500" },
+    { value: "Social Studies", emoji: "🌍", color: "from-teal-500 to-cyan-500" },
+    { value: "History", emoji: "🏛️", color: "from-amber-500 to-yellow-500" },
+    { value: "Geography", emoji: "🗺️", color: "from-teal-500 to-cyan-500" },
+    { value: "Civics", emoji: "⚖️", color: "from-blue-500 to-indigo-500" },
+    { value: "Economics", emoji: "💰", color: "from-yellow-500 to-orange-500" },
+    { value: "Computer Science", emoji: "💻", color: "from-indigo-500 to-blue-500" },
+    { value: "Other", emoji: "✨", color: "from-pink-500 to-rose-500" },
   ],
   "General Conversation": [
     { value: "Mathematics", emoji: "📐", color: "from-blue-500 to-cyan-500" },
@@ -74,9 +104,11 @@ export function SubjectSelectionDialog({
   onClose, 
   onConfirm,
   skipExamStep = false,
-  defaultExamType = ""
+  defaultExamType = "",
+  examTarget = null
 }: SubjectSelectionDialogProps) {
-  const [step, setStep] = useState<'exam' | 'subject' | 'topic'>(skipExamStep ? 'subject' : 'exam');
+  // Always start with subject step (exam step removed)
+  const [step, setStep] = useState<'subject' | 'topic'>('subject');
   const [selectedExam, setSelectedExam] = useState<string>(defaultExamType || "");
   const [selectedSubject, setSelectedSubject] = useState<string>("");
   const [customSubject, setCustomSubject] = useState<string>("");
@@ -95,13 +127,7 @@ export function SubjectSelectionDialog({
     setStep('topic');
   };
 
-  const handleBackToExam = () => {
-    setStep('exam');
-    setSelectedSubject("");
-    setCustomSubject("");
-    setSelectedTopic("");
-    setCustomTopic("");
-  };
+  // Removed handleBackToExam - exam step removed
 
   const handleBackToSubject = () => {
     setStep('subject');
@@ -149,10 +175,24 @@ export function SubjectSelectionDialog({
     topicsMap = topicsBySubjectJEE;
   } else if (finalExamType === "NEET") {
     topicsMap = topicsBySubjectNEET;
+  } else if (finalExamType === "School Level") {
+    // For School Level, use general topics (can be customized later)
+    topicsMap = topicsBySubjectGeneral;
   }
 
   const selectedExamData = examTypes.find(e => e.value === finalExamType);
-  const availableSubjects = subjectsByExam[finalExamType] || subjectsByExam["General Conversation"];
+  
+  // ✅ Filter subjects based on exam_target if available
+  let availableSubjects: Array<{ value: string; emoji: string; color: string }> = [];
+  
+  if (examTarget) {
+    // Use exam_target directly (e.g., "jee", "neet")
+    const examTargetLower = examTarget.toLowerCase();
+    availableSubjects = subjectsByExam[examTargetLower] || subjectsByExam[finalExamType] || subjectsByExam["General Conversation"];
+  } else {
+    // Fallback to exam_type
+    availableSubjects = subjectsByExam[finalExamType] || subjectsByExam["General Conversation"];
+  }
   const selectedSubjectData = availableSubjects.find(s => s.value === selectedSubject);
   const finalSubject = selectedSubject === "Other" ? customSubject : selectedSubject;
   const availableTopics = topicsMap[selectedSubject] || ["General", "Other"];
@@ -171,92 +211,16 @@ export function SubjectSelectionDialog({
             />
           </div>
           <h2 className="text-2xl font-bold bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 bg-clip-text text-transparent">
-            {step === 'exam' && 'Welcome to AI Tutor!'}
-            {step === 'subject' && `Select Subject for ${finalExamType || 'your exam'}`}
+            {step === 'subject' && `Select Subject${finalExamType ? ` for ${finalExamType}` : ''}`}
             {step === 'topic' && `${finalSubject} - Select Topic`}
           </h2>
           <p className="text-gray-600 mt-1.5 text-sm">
-            {step === 'exam' && 'Which exam are you preparing for?'}
             {step === 'subject' && 'Choose your subject to get started'}
             {step === 'topic' && 'Select a specific topic to focus on'}
           </p>
         </div>
 
-        {/* Step 1: Exam Selection */}
-        {step === 'exam' && (
-          <>
-            <div className="space-y-3 mb-5">
-              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide flex items-center gap-2">
-                <span className="text-base">🎯</span>
-                Select Exam Type
-              </label>
-              
-              <div className="grid grid-cols-1 gap-3">
-                {examTypes.map((exam) => (
-                  <button
-                    key={exam.value}
-                    onClick={() => {
-                      setSelectedExam(exam.value);
-                    }}
-                    className={`
-                      relative p-4 rounded-xl border-2 transition-all duration-300 group
-                      ${selectedExam === exam.value 
-                        ? `border-transparent bg-gradient-to-br ${exam.color} text-white shadow-lg scale-[1.02]` 
-                        : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-md'
-                      }
-                    `}
-                  >
-                    <div className="flex items-center gap-4">
-                      <span className="text-3xl transform group-hover:scale-110 transition-transform duration-300">
-                        {exam.emoji}
-                      </span>
-                      <div className="flex-1 text-left">
-                        <div className={`font-bold text-lg ${selectedExam === exam.value ? 'text-white' : 'text-gray-800'}`}>
-                          {exam.value}
-                        </div>
-                        <div className={`text-xs mt-0.5 ${selectedExam === exam.value ? 'text-white/90' : 'text-gray-500'}`}>
-                          {exam.description}
-                        </div>
-                      </div>
-                      {selectedExam === exam.value && (
-                        <div className="w-6 h-6 bg-white rounded-full flex items-center justify-center shadow-md">
-                          <span className="text-green-500 text-sm">✓</span>
-                        </div>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex gap-2.5 mt-6">
-              <button
-                onClick={handleCancel}
-                className="flex-1 px-5 py-2.5 rounded-xl bg-white text-gray-700 font-semibold border-2 border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all duration-300 shadow-sm text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleNextToSubject}
-                disabled={!selectedExam}
-                className={`
-                  flex-1 px-5 py-2.5 rounded-xl font-semibold transition-all duration-300 shadow-lg text-sm
-                  ${!selectedExam
-                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
-                    : `bg-gradient-to-r ${selectedExamData?.color || 'from-blue-600 to-purple-600'} text-white hover:shadow-xl hover:scale-105`
-                  }
-                `}
-              >
-                <div className="flex items-center justify-center gap-1.5">
-                  <span>Next: Subject</span>
-                  <span className="text-lg">→</span>
-                </div>
-              </button>
-            </div>
-          </>
-        )}
-
-        {/* Step 2: Subject Selection */}
+        {/* Step 1: Subject Selection (Exam step removed) */}
         {step === 'subject' && (
           <>
             <div className="space-y-3 mb-5">
@@ -321,11 +285,11 @@ export function SubjectSelectionDialog({
 
             <div className="flex gap-2.5 mt-6">
               <button
-                onClick={handleBackToExam}
+                onClick={handleCancel}
                 className="flex-1 px-5 py-2.5 rounded-xl bg-white text-gray-700 font-semibold border-2 border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all duration-300 shadow-sm text-sm"
                 disabled={loading}
               >
-                ← Back
+                Cancel
               </button>
               <button
                 onClick={handleNextToTopic}
@@ -347,7 +311,7 @@ export function SubjectSelectionDialog({
           </>
         )}
 
-        {/* Step 3: Topic Selection */}
+        {/* Step 2: Topic Selection */}
         {step === 'topic' && (
           <>
             <div className="space-y-3 mb-5">

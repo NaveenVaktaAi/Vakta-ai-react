@@ -20,7 +20,7 @@ const Profile = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 pt-4 lg:pt-0">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto">
         {/* Header */}
         <div className="mb-6 sm:mb-8">
@@ -141,7 +141,10 @@ const Profile = () => {
 
             {/* Action Buttons */}
             <div className="mt-6 sm:mt-8 lg:mt-10 flex flex-col sm:flex-row gap-3 sm:gap-4">
-              <button className="flex-1 px-4 sm:px-6 lg:px-8 py-3 sm:py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl font-semibold hover:from-blue-700 hover:to-purple-700 transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-lg hover:shadow-xl flex items-center justify-center gap-2 text-sm sm:text-base">
+              <button 
+                onClick={() => navigate('/edit-profile')}
+                className="flex-1 px-4 sm:px-6 lg:px-8 py-3 sm:py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl font-semibold hover:from-blue-700 hover:to-purple-700 transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-lg hover:shadow-xl flex items-center justify-center gap-2 text-sm sm:text-base"
+              >
                 <User className="w-4 h-4 sm:w-5 sm:h-5" />
                 Edit Profile
               </button>

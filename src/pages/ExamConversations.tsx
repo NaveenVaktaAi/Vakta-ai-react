@@ -2,15 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { ArrowLeft, MessageSquare, Clock, BookOpen, Loader2, Plus } from 'lucide-react';
-import axios from 'axios';
-
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000').replace(/\/$/, '');
-
-function buildHttpUrl(path: string) {
-  const hasApiPrefix = API_BASE.includes('/api/v1');
-  const base = hasApiPrefix ? API_BASE : `${API_BASE}/api/v1`;
-  return `${base}${path}`;
-}
+import { aiTutorService } from '../services/aiTutorService';
 
 interface Conversation {
   _id: string;
@@ -89,11 +81,6 @@ export default function ExamConversations() {
       return;
     }
 
-    // TODO: Get actual numeric user_id from user object or JWT
-    // For now, using hardcoded value like other pages (AiTutor uses userId = 1)
-    // Backend expects integer user_id, but MongoDB _id is ObjectId string
-    const userId = 1; // Temporary: should be extracted from user._id or JWT token
-
     const fetchConversations = async () => {
       try {
         setLoading(true);
@@ -103,19 +90,16 @@ export default function ExamConversations() {
         const decodedExamType = decodeURIComponent(examType);
         console.log('[ExamConversations] Fetching conversations for:', { 
           decodedExamType, 
-          userId: userId,
           user: user,
           user_id: user._id
         });
         
-        const apiUrl = buildHttpUrl(`/ai-tutor/conversations/exam/${userId}/${encodeURIComponent(decodedExamType)}`);
-        console.log('[ExamConversations] API URL:', apiUrl);
-        console.log('[ExamConversations] API Base:', API_BASE);
+        // Use aiTutorService which handles authentication automatically
+        // userId removed - backend gets it from authentication middleware
+        const response = await aiTutorService.getExamConversations(decodedExamType);
+        console.log('[ExamConversations] API Response:', response);
         
-        const response = await axios.get(apiUrl);
-        console.log('[ExamConversations] API Response:', response.data);
-        
-        setGroupedConversations(response.data || {});
+        setGroupedConversations(response || {});
       } catch (err: any) {
         console.error('[ExamConversations] Error fetching conversations:', err);
         console.error('[ExamConversations] Error details:', {
@@ -134,6 +118,19 @@ export default function ExamConversations() {
 
     fetchConversations();
   }, [examType, user]);
+
+  // Helper function to encode conversation ID (same as AiTutor.tsx)
+  const encodeConversationId = (id: string): string => {
+    try {
+      return btoa(id).replace(/[+/=]/g, (match) => {
+        if (match === '+') return '-';
+        if (match === '/') return '_';
+        return '';
+      });
+    } catch {
+      return encodeURIComponent(id);
+    }
+  };
 
   const formatDate = (dateString: string) => {
     if (!dateString) return 'Unknown';
@@ -184,7 +181,17 @@ export default function ExamConversations() {
   };
 
   const handleConversationClick = (conversationId: string) => {
-    navigate(`/ai-tutor?conversation=${conversationId}`);
+    // Encode conversation ID to prevent URL corruption
+    const encodedId = encodeConversationId(conversationId);
+    const decodedExamType = examType ? decodeURIComponent(examType) : '';
+    
+    // Navigate with encoded conversation ID and exam type
+    const params = new URLSearchParams();
+    params.set('conversation', encodedId);
+    if (decodedExamType) {
+      params.set('exam', decodedExamType);
+    }
+    navigate(`/ai-tutor?${params.toString()}`);
   };
 
   const handleNewConversation = () => {

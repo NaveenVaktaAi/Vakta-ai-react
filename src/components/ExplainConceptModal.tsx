@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { X, Lightbulb, BookOpen, Loader2 } from 'lucide-react';
+import { X, Lightbulb, BookOpen, Loader2, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
 interface ExplainConceptModalProps {
   isOpen: boolean;
@@ -23,6 +25,163 @@ export const ExplainConceptModal: React.FC<ExplainConceptModalProps> = ({
   title = "Concept Explanation",
   icon = "💡"
 }) => {
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const handleDownloadPDF = async () => {
+    if (!explanation) return;
+    
+    setIsDownloading(true);
+    try {
+      // Create a temporary div to render the content for PDF generation
+      const tempDiv = document.createElement('div');
+      tempDiv.style.position = 'absolute';
+      tempDiv.style.left = '-9999px';
+      tempDiv.style.top = '0';
+      tempDiv.style.width = '800px';
+      tempDiv.style.padding = '40px';
+      tempDiv.style.backgroundColor = 'white';
+      tempDiv.style.fontFamily = 'Arial, sans-serif';
+      tempDiv.style.fontSize = '14px';
+      tempDiv.style.lineHeight = '1.6';
+      tempDiv.style.color = '#333';
+      
+      // Convert markdown to HTML using simple regex-based conversion
+      let htmlContent = explanation;
+      
+      // Convert markdown headers
+      htmlContent = htmlContent.replace(/^### (.*$)/gim, '<h3 style="color: #1e40af; margin-top: 25px; margin-bottom: 15px;">$1</h3>');
+      htmlContent = htmlContent.replace(/^## (.*$)/gim, '<h2 style="color: #1e40af; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; margin-top: 25px; margin-bottom: 15px;">$1</h2>');
+      htmlContent = htmlContent.replace(/^# (.*$)/gim, '<h1 style="color: #1e40af; margin-top: 30px; margin-bottom: 20px;">$1</h1>');
+      
+      // Convert bold and italic
+      htmlContent = htmlContent.replace(/\*\*(.*?)\*\*/g, '<strong style="color: #1e40af; font-weight: bold;">$1</strong>');
+      htmlContent = htmlContent.replace(/\*(.*?)\*/g, '<em>$1</em>');
+      
+      // Convert code blocks
+      htmlContent = htmlContent.replace(/```([\s\S]*?)```/g, '<pre style="background-color: #f1f5f9; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 20px 0;"><code style="font-family: \'Courier New\', monospace; font-size: 0.9em; color: #7c3aed;">$1</code></pre>');
+      htmlContent = htmlContent.replace(/`(.*?)`/g, '<code style="background-color: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: \'Courier New\', monospace; font-size: 0.9em; color: #7c3aed;">$1</code>');
+      
+      // Convert blockquotes
+      htmlContent = htmlContent.replace(/^> (.*$)/gim, '<blockquote style="border-left: 4px solid #3b82f6; padding-left: 20px; margin: 20px 0; font-style: italic; color: #64748b;">$1</blockquote>');
+      
+      // Convert lists
+      htmlContent = htmlContent.replace(/^\- (.*$)/gim, '<li style="margin-bottom: 8px;">$1</li>');
+      htmlContent = htmlContent.replace(/^(\d+)\. (.*$)/gim, '<li style="margin-bottom: 8px;">$2</li>');
+      
+      // Wrap consecutive list items in ul tags
+      htmlContent = htmlContent.replace(/(<li style="margin-bottom: 8px;">.*<\/li>\n?)+/g, (match) => {
+        return '<ul style="margin: 15px 0; padding-left: 30px;">' + match + '</ul>';
+      });
+      
+      // Convert line breaks to paragraphs
+      const lines = htmlContent.split('\n');
+      const paragraphs: string[] = [];
+      let currentParagraph = '';
+      
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          if (currentParagraph) {
+            paragraphs.push(`<p style="margin-bottom: 15px; text-align: justify;">${currentParagraph}</p>`);
+            currentParagraph = '';
+          }
+        } else if (trimmed.startsWith('<')) {
+          // Already HTML tag, add as is
+          if (currentParagraph) {
+            paragraphs.push(`<p style="margin-bottom: 15px; text-align: justify;">${currentParagraph}</p>`);
+            currentParagraph = '';
+          }
+          paragraphs.push(trimmed);
+        } else {
+          currentParagraph += (currentParagraph ? ' ' : '') + trimmed;
+        }
+      }
+      if (currentParagraph) {
+        paragraphs.push(`<p style="margin-bottom: 15px; text-align: justify;">${currentParagraph}</p>`);
+      }
+      
+      htmlContent = paragraphs.join('\n');
+      htmlContent = htmlContent.replace(/<p style="margin-bottom: 15px; text-align: justify;"><\/p>/g, '');
+
+      // Create HTML structure with header and metadata
+      const fullHtml = `
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; margin: -40px -40px 30px -40px; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 28px;">${title}</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0;">AI Tutor - Generated Content</p>
+        </div>
+        <div style="background: #f8fafc; border: 2px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 25px;">
+          ${subject ? `<div style="margin: 8px 0; color: #64748b;"><span style="font-weight: bold; color: #1e40af;">Subject:</span> ${subject}</div>` : ''}
+          ${topic ? `<div style="margin: 8px 0; color: #64748b;"><span style="font-weight: bold; color: #1e40af;">Topic:</span> ${topic}</div>` : ''}
+          <div style="margin: 8px 0; color: #64748b;"><span style="font-weight: bold; color: #1e40af;">Generated:</span> ${new Date().toLocaleString()}</div>
+        </div>
+        <div style="font-size: 14px; line-height: 1.8;">
+          ${htmlContent}
+        </div>
+        <div style="margin-top: 40px; padding-top: 20px; border-top: 2px solid #e5e7eb; text-align: center; color: #6b7280; font-size: 12px;">
+          <p>Generated by AI Tutor • ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}</p>
+        </div>
+      `;
+      
+      tempDiv.innerHTML = fullHtml;
+      document.body.appendChild(tempDiv);
+
+      // Convert to canvas then to PDF with optimized settings for smaller file size
+      const canvas = await html2canvas(tempDiv, {
+        scale: 1.5, // Reduced from 2 to 1.5 for smaller file size (still good quality)
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        width: 800,
+        height: tempDiv.scrollHeight,
+        logging: false,
+        imageTimeout: 0,
+        removeContainer: true
+      });
+
+      // Create PDF
+      // Use JPEG with compression instead of PNG for much smaller file size
+      const imgData = canvas.toDataURL('image/jpeg', 0.85); // 85% quality JPEG (good balance)
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+        compress: true // Enable PDF compression
+      });
+
+      const imgWidth = 210; // A4 width in mm
+      const pageHeight = 295; // A4 height in mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      // Add first page
+      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST'); // FAST compression
+      heightLeft -= pageHeight;
+
+      // Add additional pages if needed
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+        heightLeft -= pageHeight;
+      }
+
+      // Generate filename
+      const filename = `${title.replace(/\s+/g, '_')}_${subject || 'AI_Tutor'}_${topic || 'Content'}_${new Date().getTime()}.pdf`;
+      
+      // Download PDF directly
+      pdf.save(filename);
+
+      // Clean up
+      document.body.removeChild(tempDiv);
+    } catch (error) {
+      console.error('Error downloading PDF:', error);
+      alert('Failed to download PDF. Please try again.');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -110,7 +269,24 @@ export const ExplainConceptModal: React.FC<ExplainConceptModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl flex justify-end">
+        <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl flex justify-between items-center">
+          <button
+            onClick={handleDownloadPDF}
+            disabled={isLoading || !explanation || isDownloading}
+            className="px-4 py-2 bg-white border-2 border-blue-600 text-blue-600 rounded-lg font-semibold hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
+          >
+            {isDownloading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Downloading...
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4" />
+                Download PDF
+              </>
+            )}
+          </button>
           <button
             onClick={onClose}
             className="px-6 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg font-semibold hover:shadow-lg transition-all"

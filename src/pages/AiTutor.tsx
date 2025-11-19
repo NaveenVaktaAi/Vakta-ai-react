@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useAiTutorWebSocket, TutorMessage } from '../hooks/useAiTutorWebSocket';
+import { useAiTutorWebSocket, TutorMessage, TokenLimitData } from '../hooks/useAiTutorWebSocket';
 import { SubjectSelectionDialog } from '../components/SubjectSelectionDialog';
 import FormattedMessage from '../components/FormattedMessage';
 import { ExplainConceptModal } from '../components/ExplainConceptModal';
 import { aiTutorService } from '../services/aiTutorService';
+import TokenLimitModal from '../components/TokenLimitModal';
 
 // File upload interface (images + PDFs)
 interface UploadedFile {
@@ -98,11 +99,13 @@ export default function AiTutor() {
   }, [navigate, searchParams, examTypeFromUrl, encodeConversationId]);
   
   const [examType, setExamType] = useState<string>('');
+  const [examTarget, setExamTarget] = useState<string | null>(null); // exam_target from student profile
   const [subject, setSubject] = useState<string>('');
   const [topic, setTopic] = useState<string>('');
   const [showSubjectDialog, setShowSubjectDialog] = useState(false);
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [isLoadingExistingConversation, setIsLoadingExistingConversation] = useState(false); // Track if loading existing conversation
+  const [loadingStudentInfo, setLoadingStudentInfo] = useState(true);
   const [inputValue, setInputValue] = useState('');
   const [avatarExpanded, setAvatarExpanded] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -118,6 +121,26 @@ export default function AiTutor() {
   const finalTranscriptRef = useRef<string>('');
   const messageSentRef = useRef<boolean>(false);
   const userId = 1;
+  
+  // Token limit modal state
+  const [tokenLimitData, setTokenLimitData] = useState<TokenLimitData | null>(null);
+  const [showTokenLimitModal, setShowTokenLimitModal] = useState(false);
+  
+  // Token limit handler - only show modal if upgrade is required (not for premium daily quota)
+  const handleTokenLimitExceeded = useCallback((data: TokenLimitData) => {
+    setTokenLimitData(data);
+    // ✅ Only show modal if upgrade is required and not daily limit exceeded
+    // Show modal only if: upgradeRequired is true AND dailyLimitExceeded is not true
+    // Don't show modal for premium users (upgradeRequired=false) or daily quota exceeded
+    if (data.upgradeRequired === true && data.dailyLimitExceeded !== true) {
+      setShowTokenLimitModal(true);
+    }
+  }, []);
+  
+  const closeTokenLimitModal = useCallback(() => {
+    setShowTokenLimitModal(false);
+    setTokenLimitData(null);
+  }, []);
 
   const {
     messages,
@@ -125,6 +148,7 @@ export default function AiTutor() {
     isTyping,
     thinkingMessage,
     thinkingStatus,
+    isStreaming,
     isConnected,
     connectionStatus,
     currentConversationId,
@@ -133,7 +157,59 @@ export default function AiTutor() {
     endConversation,
     sendMessage,
     connect,
-  } = useAiTutorWebSocket(userId);
+  } = useAiTutorWebSocket(userId, handleTokenLimitExceeded);
+
+  // Memoize filtered messages to prevent unnecessary re-renders and flickering
+  // ✅ IMPORTANT: Don't filter out messages that are currently streaming (even if empty)
+  // This ensures streaming messages are visible during streaming
+  const filteredMessages = useMemo(() => {
+    return messages.filter((m, idx) => {
+      // Keep message if it has content
+      if (m.content && m.content.trim().length > 0) return true;
+      // Keep message if it's the last assistant message and streaming is active
+      // (stream_start creates empty assistant messages that will be filled during streaming)
+      const isLastAssistant = idx === messages.length - 1 && m.role === 'assistant';
+      if (isLastAssistant && isStreaming) return true;
+      // Filter out empty user messages and other empty messages
+      return false;
+    });
+  }, [messages, isStreaming]);
+
+  // Get the last message for streaming check
+  const lastMessageIndex = useMemo(() => {
+    return filteredMessages.length - 1;
+  }, [filteredMessages.length]);
+
+  // ✅ Fetch student exam info on mount (before showing dialog)
+  useEffect(() => {
+    const fetchStudentExamInfo = async () => {
+      try {
+        setLoadingStudentInfo(true);
+        const response = await aiTutorService.getStudentExamInfo();
+        if (response.success && response.data) {
+          setExamType(response.data.exam_type);
+          setExamTarget(response.data.exam_target);
+          console.log('[AiTutor] Student exam info loaded:', response.data);
+        }
+      } catch (error) {
+        console.error('[AiTutor] Failed to load student exam info:', error);
+        // Default to General Conversation if fetch fails
+        setExamType('General Conversation');
+      } finally {
+        setLoadingStudentInfo(false);
+      }
+    };
+    
+    fetchStudentExamInfo();
+  }, []);
+
+  // ✅ Show dialog after student info is loaded (if no conversation exists)
+  useEffect(() => {
+    if (!loadingStudentInfo && !conversationIdFromUrl && !currentConversationId && !subject && !topic) {
+      // Student info loaded, no conversation, no subject/topic - show dialog
+      setShowSubjectDialog(true);
+    }
+  }, [loadingStudentInfo, conversationIdFromUrl, currentConversationId, subject, topic]);
 
   // Load existing conversation from URL
   useEffect(() => {
@@ -219,6 +295,9 @@ export default function AiTutor() {
           setCurrentConversationId(decodedId);
           connect(decodedId);
           
+          // Ensure subject dialog is closed when conversation is loaded
+          setShowSubjectDialog(false);
+          
           console.log('[AiTutor] ✅ Existing conversation loaded:', conversation);
         } catch (error) {
           console.error('[AiTutor] ❌ Failed to load conversation:', error);
@@ -237,17 +316,26 @@ export default function AiTutor() {
       
       loadExistingConversation();
     } else if (!conversationIdFromUrl && !currentConversationId) {
+      // ✅ Wait for student info to load before showing dialog
+      if (loadingStudentInfo) {
+        return; // Don't show dialog while loading
+      }
+      
       // No conversation ID in URL - check if exam type is provided
       if (examTypeFromUrl) {
         setExamType(examTypeFromUrl);
         setShowSubjectDialog(true);
-      } else if (!examType && !subject && !topic) {
-        // No params at all - show dialog
+      } else if (!subject && !topic) {
+        // No params at all - show dialog only after student info is loaded
+        // examType might be set from student profile, but we still need subject/topic
         setShowSubjectDialog(true);
       }
+    } else if (conversationIdFromUrl && currentConversationId) {
+      // If we have both URL conversation ID and current conversation ID, ensure dialog is closed
+      setShowSubjectDialog(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationIdFromUrl, examTypeFromUrl, currentConversationId, setCurrentConversationId, connect, setMessages, decodeConversationId]);
+  }, [conversationIdFromUrl, examTypeFromUrl, currentConversationId, setCurrentConversationId, connect, setMessages, decodeConversationId, loadingStudentInfo]);
 
   useEffect(() => {
     if (examType && subject && topic && !currentConversationId && !conversationIdFromUrl) {
@@ -327,9 +415,13 @@ export default function AiTutor() {
       defaultMessage = 'Please analyze this document';
     }
 
-    // Text input = no audio response (isAudio: false)
+    // Audio behavior:
+    // - In expanded view: Always generate audio (isAudio: true) - both text and voice input
+    // - In normal view: Only generate audio for voice input (isAudio: false for text)
+    const shouldGenerateAudio = avatarExpanded; // If expanded, always generate audio
+    
     await sendMessage(text || defaultMessage, { 
-      isAudio: false,
+      isAudio: shouldGenerateAudio, // Generate audio in expanded view, no audio in normal view for text
       images: images.length > 0 ? images : undefined,
       pdfs: pdfs.length > 0 ? pdfs : undefined,
       filePreviews: filePreviews  // Pass previews for chat display
@@ -478,6 +570,23 @@ export default function AiTutor() {
           }
         } catch (error: any) {
           console.error('[Explain Concept] ❌ API call failed:', error);
+          
+          // ✅ Check if it's a token limit error (403 with specific structure)
+          if (error.response?.status === 403 && error.response?.data?.detail) {
+            const detail = error.response.data.detail;
+            if (typeof detail === 'string' || (detail.upgradeRequired && detail.service === 'aiTutor')) {
+              // Show popup modal instead of error message
+              setTokenLimitData({
+                message: typeof detail === 'string' ? detail : (detail.message || 'Your free trial credits are running low.'),
+                tokensRemaining: detail.tokensRemaining,
+                service: 'aiTutor',
+                upgradeRequired: true
+              });
+              setShowTokenLimitModal(true);
+              return; // Don't set error message
+            }
+          }
+          
           setExplanationError('Sorry, I encountered an error while generating the explanation. Please try again.');
         } finally {
           explainConceptRequestRef.current = null;
@@ -520,6 +629,23 @@ export default function AiTutor() {
           }
         } catch (error: any) {
           console.error('[Practice Problem] ❌ API call failed:', error);
+          
+          // ✅ Check if it's a token limit error (403 with specific structure)
+          if (error.response?.status === 403 && error.response?.data?.detail) {
+            const detail = error.response.data.detail;
+            if (typeof detail === 'string' || (detail.upgradeRequired && detail.service === 'aiTutor')) {
+              // Show popup modal instead of error message
+              setTokenLimitData({
+                message: typeof detail === 'string' ? detail : (detail.message || 'Your free trial credits are running low.'),
+                tokensRemaining: detail.tokensRemaining,
+                service: 'aiTutor',
+                upgradeRequired: true
+              });
+              setShowTokenLimitModal(true);
+              return; // Don't set error message
+            }
+          }
+          
           setPracticeError('Sorry, I encountered an error while generating the practice problem. Please try again.');
         } finally {
           practiceProblemRequestRef.current = null;
@@ -562,6 +688,23 @@ export default function AiTutor() {
           }
         } catch (error: any) {
           console.error('[Study Guide] ❌ API call failed:', error);
+          
+          // ✅ Check if it's a token limit error (403 with specific structure)
+          if (error.response?.status === 403 && error.response?.data?.detail) {
+            const detail = error.response.data.detail;
+            if (typeof detail === 'string' || (detail.upgradeRequired && detail.service === 'aiTutor')) {
+              // Show popup modal instead of error message
+              setTokenLimitData({
+                message: typeof detail === 'string' ? detail : (detail.message || 'Your free trial credits are running low.'),
+                tokensRemaining: detail.tokensRemaining,
+                service: 'aiTutor',
+                upgradeRequired: true
+              });
+              setShowTokenLimitModal(true);
+              return; // Don't set error message
+            }
+          }
+          
           setStudyError('Sorry, I encountered an error while generating the study guide. Please try again.');
         } finally {
           studyGuideRequestRef.current = null;
@@ -604,6 +747,23 @@ export default function AiTutor() {
           }
         } catch (error: any) {
           console.error('[Key Points] ❌ API call failed:', error);
+          
+          // ✅ Check if it's a token limit error (403 with specific structure)
+          if (error.response?.status === 403 && error.response?.data?.detail) {
+            const detail = error.response.data.detail;
+            if (typeof detail === 'string' || (detail.upgradeRequired && detail.service === 'aiTutor')) {
+              // Show popup modal instead of error message
+              setTokenLimitData({
+                message: typeof detail === 'string' ? detail : (detail.message || 'Your free trial credits are running low.'),
+                tokensRemaining: detail.tokensRemaining,
+                service: 'aiTutor',
+                upgradeRequired: true
+              });
+              setShowTokenLimitModal(true);
+              return; // Don't set error message
+            }
+          }
+          
           setKeyPointsError('Sorry, I encountered an error while generating the key points. Please try again.');
         } finally {
           keyPointsRequestRef.current = null;
@@ -682,6 +842,24 @@ export default function AiTutor() {
         }
       } catch (error: any) {
         console.error('Error explaining concept:', error);
+        
+        // ✅ Check if it's a token limit error (403 with specific structure)
+        if (error.response?.status === 403 && error.response?.data?.detail) {
+          const detail = error.response.data.detail;
+          if (typeof detail === 'string' || (detail.upgradeRequired && detail.service === 'aiTutor')) {
+            // Show popup modal instead of error message
+            setTokenLimitData({
+              message: typeof detail === 'string' ? detail : (detail.message || 'Your free trial credits are running low.'),
+              tokensRemaining: detail.tokensRemaining,
+              service: 'aiTutor',
+              upgradeRequired: true
+            });
+            setShowTokenLimitModal(true);
+            setExplainLoading(false);
+            return; // Don't set error message
+          }
+        }
+        
         setExplanation('Sorry, I encountered an error while generating the explanation. Please try again.');
       } finally {
         setExplainLoading(false);
@@ -735,6 +913,24 @@ export default function AiTutor() {
         }
       } catch (error: any) {
         console.error('Error generating practice problem:', error);
+        
+        // ✅ Check if it's a token limit error (403 with specific structure)
+        if (error.response?.status === 403 && error.response?.data?.detail) {
+          const detail = error.response.data.detail;
+          if (typeof detail === 'string' || (detail.upgradeRequired && detail.service === 'aiTutor')) {
+            // Show popup modal instead of error message
+            setTokenLimitData({
+              message: typeof detail === 'string' ? detail : (detail.message || 'Your free trial credits are running low.'),
+              tokensRemaining: detail.tokensRemaining,
+              service: 'aiTutor',
+              upgradeRequired: true
+            });
+            setShowTokenLimitModal(true);
+            setPracticeLoading(false);
+            return; // Don't set error message
+          }
+        }
+        
         setPracticeProblem('Sorry, I encountered an error while generating the practice problem. Please try again.');
       } finally {
         setPracticeLoading(false);
@@ -788,6 +984,24 @@ export default function AiTutor() {
         }
       } catch (error: any) {
         console.error('Error generating study guide:', error);
+        
+        // ✅ Check if it's a token limit error (403 with specific structure)
+        if (error.response?.status === 403 && error.response?.data?.detail) {
+          const detail = error.response.data.detail;
+          if (typeof detail === 'string' || (detail.upgradeRequired && detail.service === 'aiTutor')) {
+            // Show popup modal instead of error message
+            setTokenLimitData({
+              message: typeof detail === 'string' ? detail : (detail.message || 'Your free trial credits are running low.'),
+              tokensRemaining: detail.tokensRemaining,
+              service: 'aiTutor',
+              upgradeRequired: true
+            });
+            setShowTokenLimitModal(true);
+            setStudyLoading(false);
+            return; // Don't set error message
+          }
+        }
+        
         setStudyGuide('Sorry, I encountered an error while generating the study guide. Please try again.');
       } finally {
         setStudyLoading(false);
@@ -841,6 +1055,24 @@ export default function AiTutor() {
         }
       } catch (error: any) {
         console.error('Error generating key points:', error);
+        
+        // ✅ Check if it's a token limit error (403 with specific structure)
+        if (error.response?.status === 403 && error.response?.data?.detail) {
+          const detail = error.response.data.detail;
+          if (typeof detail === 'string' || (detail.upgradeRequired && detail.service === 'aiTutor')) {
+            // Show popup modal instead of error message
+            setTokenLimitData({
+              message: typeof detail === 'string' ? detail : (detail.message || 'Your free trial credits are running low.'),
+              tokensRemaining: detail.tokensRemaining,
+              service: 'aiTutor',
+              upgradeRequired: true
+            });
+            setShowTokenLimitModal(true);
+            setKeyPointsLoading(false);
+            return; // Don't set error message
+          }
+        }
+        
         setKeyPoints('Sorry, I encountered an error while generating the key points. Please try again.');
       } finally {
         setKeyPointsLoading(false);
@@ -859,7 +1091,8 @@ export default function AiTutor() {
       handleKeyPoints();
     } else if (isConnected && currentConversationId) {
       // Legacy: fallback for prompt-based actions
-      sendMessage(actionOrPrompt, { isAudio: false });
+      // In expanded view, generate audio; in normal view, text only
+      sendMessage(actionOrPrompt, { isAudio: avatarExpanded });
     }
   };
 
@@ -1161,57 +1394,60 @@ export default function AiTutor() {
 
   return (
     <div className="flex flex-col h-screen bg-gradient-to-br from-purple-50 to-blue-50">
-      {loadingConversation ? (
+      {(loadingConversation || loadingStudentInfo) ? (
         <div className="flex items-center justify-center h-full">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-            <p className="text-gray-600">Loading conversation...</p>
+            <p className="text-gray-600">{loadingStudentInfo ? 'Loading your profile...' : 'Loading conversation...'}</p>
           </div>
         </div>
       ) : (
         <>
       <SubjectSelectionDialog
         isOpen={showSubjectDialog}
-            skipExamStep={!!examType} // Skip exam step if exam type already set
-            defaultExamType={examType} // Pass exam type if available
+        skipExamStep={true} // Always skip exam step (removed)
+        defaultExamType={examType} // Pass exam type from student profile
+        examTarget={examTarget} // Pass exam_target for subject filtering
         onClose={() => {
           // If user cancels, leave this page (no AI Tutor without a subject)
           navigate('/dashboard');
         }}
-            onConfirm={(exam, s, t) => {
+        onConfirm={(exam, s, t) => {
           setShowSubjectDialog(false);
-              setExamType(exam || examType); // Use passed exam or existing
+          setExamType(exam || examType); // Use passed exam or existing
           setSubject(s);
           setTopic(t);
         }}
       />
 
           {((subject || currentConversationId) || messages.length > 0) && (
-      <div className="bg-white shadow-sm border-b border-gray-200 p-3 sm:p-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0 flex items-center gap-3">
-            <h1 className="text-lg sm:text-2xl font-bold text-gray-800 truncate">AI Tutor</h1>
+          <div className="bg-white shadow-sm border-b border-gray-200 p-2 sm:p-3 md:p-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-3">
+          <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2 sm:gap-3">
+            <h1 className="text-base sm:text-lg md:text-2xl font-bold text-gray-800">AI Tutor</h1>
             {examType && (
-              <p className="text-xs sm:text-sm text-gray-600 truncate px-2 py-1 bg-gradient-to-r from-blue-100 to-purple-100 rounded-lg font-medium">
+              <p className="text-[10px] sm:text-xs md:text-sm text-gray-600 truncate px-1.5 sm:px-2 py-0.5 sm:py-1 bg-gradient-to-r from-blue-100 to-purple-100 rounded-lg font-medium">
                 {examType}
               </p>
             )}
-            <p className="text-xs sm:text-sm text-gray-600 truncate">Subject: {subject || '...'}</p>
+            {subject && (
+              <p className="text-[10px] sm:text-xs md:text-sm text-gray-600 truncate">Subject: {subject}</p>
+            )}
             {topic && (
-              <p className="text-xs sm:text-sm text-gray-500 truncate">Topic: {topic}</p>
+              <p className="text-[10px] sm:text-xs md:text-sm text-gray-500 truncate">Topic: {topic}</p>
             )}
             {!subject && (
               <button
-                className="px-2 py-1 rounded-md bg-gradient-to-r from-blue-600 to-purple-600 text-white text-xs"
+                className="px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md bg-gradient-to-r from-blue-600 to-purple-600 text-white text-[10px] sm:text-xs"
                 onClick={() => setShowSubjectDialog(true)}
               >Choose Subject</button>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <div className={`w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
-            <span className="text-xs sm:text-sm text-gray-600">{connectionStatus}</span>
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            <div className={`w-2 h-2 sm:w-2.5 sm:h-2.5 md:w-3 md:h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+            <span className="text-[10px] sm:text-xs md:text-sm text-gray-600">{connectionStatus}</span>
             {currentConversationId && (
-              <span className="hidden sm:inline text-xs text-gray-400">{currentConversationId.slice(0, 8)}...</span>
+              <span className="hidden md:inline text-xs text-gray-400">{currentConversationId.slice(0, 8)}...</span>
             )}
           </div>
         </div>
@@ -1221,20 +1457,20 @@ export default function AiTutor() {
       {avatarExpanded && (
         <div className="fixed inset-0 z-50 bg-white">
           {/* Top bar */}
-          <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200">
-            <h3 className="font-semibold text-gray-800">AI Tutor</h3>
-            <button className="px-3 py-1 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-800" onClick={handleCloseAvatar}>Close</button>
+          <div className="flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 border-b border-gray-200">
+            <h3 className="font-semibold text-gray-800 text-sm sm:text-base">AI Tutor</h3>
+            <button className="px-2 sm:px-3 py-1.5 sm:py-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs sm:text-sm" onClick={handleCloseAvatar}>Close</button>
           </div>
 
-          {/* Two-column expanded view: Left avatar (50%), Right chat (50%) */}
-          <div className="flex h-[calc(100vh-44px)]">
-            <div className="w-[50%] border-r border-gray-200 flex items-center justify-center bg-black/5 relative">
+          {/* Two-column expanded view: Stack on mobile, side-by-side on tablet+ */}
+          <div className="flex flex-col md:flex-row h-[calc(100vh-44px)] md:h-[calc(100vh-52px)]">
+            <div className="w-full md:w-[50%] h-[40vh] md:h-full border-b md:border-b-0 md:border-r border-gray-200 flex items-center justify-center bg-black/5 relative">
               {/* Mic Icon - Floating on Avatar Top Right */}
-              <div className="absolute top-8 right-8 z-20">
+              <div className="absolute top-2 right-2 sm:top-4 sm:right-4 md:top-8 md:right-8 z-20">
                 <button
                   onClick={toggleRecording}
                   disabled={!currentConversationId || !isConnected}
-                  className={`group relative p-4 rounded-full shadow-2xl transition-all duration-300 transform hover:scale-110 active:scale-95 ${
+                  className={`group relative p-2.5 sm:p-3 md:p-4 rounded-full shadow-2xl transition-all duration-300 transform hover:scale-110 active:scale-95 ${
                     isRecording
                       ? 'bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white ring-4 ring-red-300 ring-opacity-60 animate-pulse'
                       : 'bg-gradient-to-br from-purple-500 via-blue-500 to-purple-600 hover:from-purple-600 hover:via-blue-600 hover:to-purple-700 text-white shadow-purple-500/50 hover:shadow-purple-500/70'
@@ -1242,7 +1478,7 @@ export default function AiTutor() {
                   title={isRecording ? 'Stop recording (Click to stop)' : 'Start audio recording (Click to record)'}
                 >
                   {/* Mic Icon */}
-                  <svg className={`w-7 h-7 transition-all ${isRecording ? 'animate-pulse' : 'group-hover:scale-110'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 transition-all ${isRecording ? 'animate-pulse' : 'group-hover:scale-110'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     {isRecording ? (
                       <>
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
@@ -1283,10 +1519,12 @@ export default function AiTutor() {
                 />
               </div>
             </div>
-            <div className="flex-1 flex flex-col min-w-0">
-              <div className="flex-1 overflow-y-auto p-3 sm:p-4 bg-gray-50">
-                {messages.map((m, idx) => (
-                  <div key={idx} className={`mb-2 sm:mb-3 ${m.role === 'user' ? 'text-right' : 'text-left'}`}>
+            <div className="flex-1 flex flex-col min-w-0 h-[60vh] md:h-full">
+              <div className="flex-1 overflow-y-auto p-2 sm:p-3 md:p-4 bg-gray-50">
+                {filteredMessages.map((m, idx) => {
+                  const isStreamingMessage = isStreaming && idx === lastMessageIndex && m.role === 'assistant';
+                  return (
+                  <div key={m.id || `msg-${idx}`} className={`mb-2 sm:mb-3 ${m.role === 'user' ? 'text-right' : 'text-left'}`}>
                     <div className={`inline-block px-4 py-3 rounded-lg text-sm sm:text-base shadow-sm ${m.role === 'user' ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white' : 'bg-white text-gray-800 border border-gray-200 ai-tutor-message'}`}>
                       {m.role === 'user' ? (
                         <div className="text-white">
@@ -1325,13 +1563,24 @@ export default function AiTutor() {
                           <div className="whitespace-pre-wrap break-words">{m.content}</div>
                         </div>
                       ) : (
-                        <div className="text-gray-800 [&_*]:!text-gray-800 [&_*]:text-gray-800 [&_p]:!text-gray-800 [&_p]:text-gray-800 [&_strong]:!text-gray-900 [&_strong]:text-gray-900 [&_strong]:font-semibold [&_code]:!text-indigo-700 [&_code]:text-indigo-700 [&_div]:!text-gray-800 [&_div]:text-gray-800 [&_h1]:text-blue-700 [&_h1]:font-bold [&_h2]:text-blue-600 [&_h2]:font-bold [&_h3]:text-blue-600 [&_h3]:font-bold [&_h4]:text-blue-600 [&_h4]:font-bold [&_ul]:my-4 [&_ol]:my-4 [&_li]:text-gray-800 [&_li]:leading-relaxed" style={{ color: '#1f2937 !important' }}>
-                          <FormattedMessage content={m.content} />
+                        <div className="text-sm sm:text-[15px] md:text-base leading-relaxed text-gray-800">
+                          {isStreamingMessage ? (
+                            // During streaming, use FormattedMessage for proper structure rendering
+                            // This ensures markdown formatting is applied in real-time
+                            <div className="relative">
+                              <FormattedMessage content={m.content} />
+                              <span className="inline-block w-2 h-4 bg-purple-500 animate-pulse ml-1 align-middle"></span>
+                            </div>
+                          ) : (
+                            // After streaming, show formatted markdown
+                            <FormattedMessage content={m.content} />
+                          )}
                         </div>
                       )}
                     </div>
                   </div>
-                ))}
+                );
+                })}
                 {(thinkingMessage || thinkingStatus) ? (
                   <div className="text-left mb-3">
                     <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-50 to-purple-50 border border-purple-200 rounded-lg shadow-sm animate-pulse">
@@ -1360,7 +1609,7 @@ export default function AiTutor() {
               </div>
               
               {/* File Upload Section in Expanded View */}
-              <div className="border-t border-gray-200 p-2 sm:p-3">
+              <div className="border-t border-gray-200 p-2 sm:p-2.5 md:p-3">
                 {/* File Preview Area (Images + PDFs) */}
                 {uploadedFiles.length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-2 p-2 bg-gray-50 rounded-lg">
@@ -1398,15 +1647,15 @@ export default function AiTutor() {
                 )}
                 
                 {/* Input Area */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2">
                   {/* File upload button (Images + PDFs) */}
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={uploadedFiles.length >= 3 || !currentConversationId || !isConnected}
-                    className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                    className="p-1.5 sm:p-2 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
                     title={uploadedFiles.length >= 3 ? 'Maximum 3 files allowed' : 'Upload images or PDFs'}
                   >
-                    <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                     </svg>
                   </button>
@@ -1415,14 +1664,14 @@ export default function AiTutor() {
                   <button
                     onClick={toggleRecording}
                     disabled={!currentConversationId || !isConnected}
-                    className={`p-2 rounded-lg font-semibold transition-all ${
+                    className={`p-1.5 sm:p-2 rounded-lg font-semibold transition-all flex-shrink-0 ${
                       isRecording
                         ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse'
                         : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
                     } disabled:opacity-50`}
                     title={isRecording ? 'Stop recording' : 'Start audio recording'}
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                     </svg>
                   </button>
@@ -1433,13 +1682,13 @@ export default function AiTutor() {
                     onKeyDown={(e) => { if (e.key === 'Enter' && !isRecording) handleSend(); }}
                     placeholder={uploadedFiles.length > 0 ? (isRecording ? "Listening..." : "Add message (optional)...") : (isRecording ? "Listening..." : "Type your question…")}
                     readOnly={isRecording}
-                    className="flex-1 px-3 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base text-gray-900 placeholder-gray-400 bg-white"
+                    className="flex-1 min-w-0 px-2 sm:px-3 py-1.5 sm:py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-xs sm:text-sm md:text-base text-gray-900 placeholder-gray-400 bg-white"
                     style={{ color: '#111827' }}
                 />
                 <button
                   onClick={handleSend}
                     disabled={(!inputValue.trim() && uploadedFiles.length === 0) || !currentConversationId || !isConnected || isRecording}
-                    className="px-3 py-2 sm:px-4 sm:py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg font-semibold disabled:opacity-50 hover:shadow-lg transition-all"
+                    className="px-2.5 sm:px-3 md:px-4 py-1.5 sm:py-2 md:py-2.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg font-semibold text-xs sm:text-sm disabled:opacity-50 hover:shadow-lg transition-all flex-shrink-0"
                 >
                     {uploadedFiles.length > 0 ? (
                       <div className="flex items-center gap-1">
@@ -1458,10 +1707,10 @@ export default function AiTutor() {
       )}
 
       {(subject || currentConversationId) && (
-      <div className="flex-1 flex flex-col lg:flex-row gap-3 sm:gap-4 p-3 sm:p-4 overflow-hidden relative">
-        {/* Chat Area - Reduced width to make room for quick actions */}
-        <div className="flex-1 lg:flex-[0_0_calc(100%-280px)] bg-white border border-gray-200 rounded-2xl shadow-lg flex flex-col min-h-0 overflow-hidden">
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 sm:space-y-5 bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/30">
+      <div className="flex-1 flex flex-col lg:flex-row gap-2 sm:gap-3 md:gap-4 p-2 sm:p-3 md:p-4 overflow-hidden relative">
+        {/* Chat Area - Full width on mobile, reduced on desktop for quick actions */}
+        <div className="flex-1 lg:flex-[0_0_calc(100%-280px)] bg-white border border-gray-200 rounded-xl sm:rounded-2xl shadow-lg flex flex-col min-h-0 overflow-hidden">
+          <div className="flex-1 overflow-y-auto p-2 sm:p-3 md:p-4 lg:p-6 space-y-3 sm:space-y-4 md:space-y-5 bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/30">
             {messages.length === 0 && (
               <div className="flex flex-col items-center justify-center h-full py-12 text-center">
                 <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center mb-4 shadow-lg">
@@ -1477,17 +1726,19 @@ export default function AiTutor() {
                 </p>
               </div>
             )}
-            {messages.map((m, idx) => (
+            {filteredMessages.map((m, idx) => {
+                const isStreamingMessage = isStreaming && idx === lastMessageIndex && m.role === 'assistant';
+                return (
               <div 
-                key={idx} 
-                className={`flex gap-3 sm:gap-4 items-start animate-in fade-in slide-in-from-bottom-4 duration-300 ${
+                key={m.id || `msg-${idx}`} 
+                className={`flex gap-2 sm:gap-3 md:gap-4 items-start animate-in fade-in slide-in-from-bottom-4 duration-300 ${
                   m.role === 'user' ? 'justify-end' : 'justify-start'
                 }`}
               >
                 {/* Bot Avatar - Only for assistant messages (left side) */}
                 {m.role === 'assistant' && (
                   <div className="relative flex-shrink-0">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 via-purple-500 to-pink-500 p-0.5 shadow-lg ring-2 ring-white">
+                    <div className="w-8 h-8 sm:w-9 sm:h-9 md:w-10 md:h-10 rounded-full bg-gradient-to-br from-blue-500 via-purple-500 to-pink-500 p-0.5 shadow-lg ring-2 ring-white">
                       <div className="w-full h-full rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
                     <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
@@ -1502,9 +1753,9 @@ export default function AiTutor() {
                 {/* User Avatar - Only for user messages (right side, before message) */}
                 {m.role === 'user' && (
                   <div className="relative flex-shrink-0">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-300 to-gray-400 p-0.5 shadow-lg ring-2 ring-white">
+                    <div className="w-8 h-8 sm:w-9 sm:h-9 md:w-10 md:h-10 rounded-full bg-gradient-to-br from-gray-300 to-gray-400 p-0.5 shadow-lg ring-2 ring-white">
                       <div className="w-full h-full rounded-full bg-gradient-to-br from-gray-200 to-gray-300 flex items-center justify-center">
-                        <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                         </svg>
                       </div>
@@ -1513,10 +1764,10 @@ export default function AiTutor() {
                 )}
 
                 {/* Message Bubble */}
-                <div className={`max-w-[85%] sm:max-w-[75%] lg:max-w-[65%] ${
+                <div className={`max-w-[80%] sm:max-w-[75%] md:max-w-[70%] lg:max-w-[65%] ${
                   m.role === 'user' ? 'flex flex-col items-end' : 'flex flex-col items-start'
                 }`}>
-                  <div className={`group relative rounded-2xl shadow-lg transition-all duration-300 hover:shadow-xl ${
+                  <div className={`group relative rounded-xl sm:rounded-2xl shadow-lg transition-all duration-300 hover:shadow-xl ${
                     m.role === 'user'
                       ? 'bg-gradient-to-br from-blue-600 via-blue-500 to-purple-600 text-white rounded-br-md'
                       : 'bg-white text-gray-900 rounded-bl-md border border-gray-100'
@@ -1527,14 +1778,14 @@ export default function AiTutor() {
                         ? 'right-0 translate-x-1 -translate-y-1' 
                         : 'left-0 -translate-x-1 -translate-y-1'
                     }`}>
-                      <div className={`w-4 h-4 rotate-45 ${
+                      <div className={`w-3 h-3 sm:w-4 sm:h-4 rotate-45 ${
                         m.role === 'user'
                           ? 'bg-gradient-to-br from-blue-600 to-purple-600'
                           : 'bg-white border-l border-b border-gray-100'
                       }`}></div>
                     </div>
 
-                    <div className={`relative p-4 sm:p-5 ${m.role === 'user' ? 'pr-5' : 'pl-5'}`}>
+                    <div className={`relative p-2.5 sm:p-3 md:p-4 lg:p-5 ${m.role === 'user' ? 'pr-3 sm:pr-4 md:pr-5' : 'pl-3 sm:pl-4 md:pl-5'}`}>
                     {m.role === 'user' ? (
                       <div className="text-white">
                           {/* File previews for user messages */}
@@ -1571,13 +1822,23 @@ export default function AiTutor() {
                             ))}
                           </div>
                         )}
-                          <div className="text-[15px] sm:text-base leading-relaxed whitespace-pre-wrap break-words font-medium">
+                          <div className="text-sm sm:text-[15px] md:text-base leading-relaxed whitespace-pre-wrap break-words font-medium">
                             {m.content}
                           </div>
                       </div>
                     ) : (
-                        <div className="text-[15px] sm:text-base leading-relaxed text-gray-800 [&_*]:text-gray-800 [&_*]:!text-gray-800 [&_p]:text-gray-800 [&_p]:!text-gray-800 [&_p]:mb-3 [&_p]:leading-relaxed [&_strong]:text-gray-900 [&_strong]:!text-gray-900 [&_strong]:font-bold [&_strong]:text-blue-700 [&_code]:bg-gray-100 [&_code]:text-indigo-700 [&_code]:px-2 [&_code]:py-1 [&_code]:rounded [&_code]:text-sm [&_code]:font-mono [&_h1]:text-blue-700 [&_h1]:font-bold [&_h1]:text-xl [&_h1]:mb-2 [&_h2]:text-blue-600 [&_h2]:font-bold [&_h2]:text-lg [&_h2]:mb-2 [&_h3]:text-blue-600 [&_h3]:font-semibold [&_h3]:text-base [&_h3]:mb-2 [&_ul]:my-3 [&_ul]:ml-4 [&_ol]:my-3 [&_ol]:ml-4 [&_li]:text-gray-800 [&_li]:leading-relaxed [&_li]:mb-1 [&_blockquote]:border-l-4 [&_blockquote]:border-blue-300 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-gray-600 [&_pre]:bg-gray-100 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto">
-                        <FormattedMessage content={m.content} />
+                        <div className="text-sm sm:text-[15px] md:text-base leading-relaxed text-gray-800">
+                        {isStreamingMessage ? (
+                          // During streaming, use FormattedMessage for proper structure rendering
+                          // This ensures markdown formatting is applied in real-time
+                          <div className="relative">
+                            <FormattedMessage content={m.content} />
+                            <span className="inline-block w-2 h-4 bg-purple-500 animate-pulse ml-1 align-middle"></span>
+                          </div>
+                        ) : (
+                          // After streaming, show formatted markdown
+                          <FormattedMessage content={m.content} />
+                        )}
                       </div>
                     )}
                   </div>
@@ -1588,7 +1849,8 @@ export default function AiTutor() {
                   </span>
                   </div>
               </div>
-            ))}
+            );
+            })}
             {(thinkingMessage || thinkingStatus) ? (
               <div className="flex gap-3 sm:gap-4 items-start animate-in fade-in slide-in-from-bottom-4 duration-300">
                 <div className="relative flex-shrink-0">
@@ -1635,10 +1897,10 @@ export default function AiTutor() {
             <div ref={messagesEndRef} />
           </div>
 
-          <div className="border-t border-gray-200 bg-white/80 backdrop-blur-sm p-3 sm:p-4">
+          <div className="border-t border-gray-200 bg-white/80 backdrop-blur-sm p-2 sm:p-3 md:p-4">
             {/* File Preview Area (Images + PDFs) */}
             {uploadedFiles.length > 0 && (
-              <div className="flex flex-wrap gap-2 mb-2 p-2 bg-gray-50 rounded-lg">
+              <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-2 p-1.5 sm:p-2 bg-gray-50 rounded-lg">
                 {uploadedFiles.map((file) => (
                   <div key={file.id} className="relative group">
                     {file.type === 'image' ? (
@@ -1688,10 +1950,10 @@ export default function AiTutor() {
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploadedFiles.length >= 3 || !currentConversationId || !isConnected}
-                className="p-2.5 rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 hover:from-gray-100 hover:to-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md border border-gray-200 hover:border-gray-300"
+                className="p-2 sm:p-2.5 rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 hover:from-gray-100 hover:to-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md border border-gray-200 hover:border-gray-300 flex-shrink-0"
                 title={uploadedFiles.length >= 3 ? 'Maximum 3 files allowed' : 'Upload images or PDFs'}
               >
-                <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 sm:w-5 sm:h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                 </svg>
               </button>
@@ -1702,7 +1964,7 @@ export default function AiTutor() {
               onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
                 placeholder={uploadedFiles.length > 0 ? "Add a message (optional)..." : "Type your question…"}
-                className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base text-gray-900 placeholder-gray-400 bg-white shadow-sm transition-all hover:border-gray-300 focus:shadow-md"
+                className="flex-1 min-w-0 px-2 sm:px-3 md:px-4 py-1.5 sm:py-2 md:py-2.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-xs sm:text-sm md:text-base text-gray-900 placeholder-gray-400 bg-white shadow-sm transition-all hover:border-gray-300 focus:shadow-md"
                 style={{ color: '#111827' }}
               />
               
@@ -1710,7 +1972,7 @@ export default function AiTutor() {
             <button
               onClick={handleSend}
                 disabled={(!inputValue.trim() && uploadedFiles.length === 0) || !currentConversationId || !isConnected}
-                className="px-4 py-2.5 sm:px-5 sm:py-3 bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white rounded-xl font-semibold disabled:opacity-50 hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 shadow-lg"
+                className="px-3 py-1.5 sm:px-4 sm:py-2 md:px-5 md:py-2.5 bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white rounded-xl font-semibold text-xs sm:text-sm disabled:opacity-50 hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 shadow-lg flex-shrink-0"
             >
                 {uploadedFiles.length > 0 ? (
                   <div className="flex items-center gap-1">
@@ -1725,18 +1987,18 @@ export default function AiTutor() {
           </div>
         </div>
 
-        {/* Quick Actions Buttons - Directly Visible on Right Side */}
-        <div className="lg:w-64 flex flex-col gap-2">
-          <div className="bg-white border border-gray-200 rounded-2xl shadow-lg p-4 sm:p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
-                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        {/* Quick Actions Buttons - Hidden on mobile, visible on tablet+ */}
+        <div className="hidden lg:flex lg:w-64 flex-col gap-2">
+          <div className="bg-white border border-gray-200 rounded-2xl shadow-lg p-3 sm:p-4 md:p-5">
+            <div className="flex items-center gap-2 mb-3 sm:mb-4">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>
-              <h3 className="font-bold text-gray-800 text-sm sm:text-base">Quick Actions</h3>
+              <h3 className="font-bold text-gray-800 text-xs sm:text-sm md:text-base">Quick Actions</h3>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5 sm:space-y-2">
               {quickActions.map((action, idx) => (
             <button
                   key={idx}
@@ -1746,14 +2008,14 @@ export default function AiTutor() {
                     }
                   }}
                   disabled={!isConnected || isTyping || (!action.action && !currentConversationId)}
-                  className="w-full flex items-center gap-3 p-3.5 bg-gradient-to-r from-blue-50 via-purple-50 to-pink-50 hover:from-blue-100 hover:via-purple-100 hover:to-pink-100 text-gray-700 border border-purple-200/50 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-left text-sm font-medium shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98]"
+                  className="w-full flex items-center gap-2 sm:gap-3 p-2.5 sm:p-3 md:p-3.5 bg-gradient-to-r from-blue-50 via-purple-50 to-pink-50 hover:from-blue-100 hover:via-purple-100 hover:to-pink-100 text-gray-700 border border-purple-200/50 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-left text-xs sm:text-sm font-medium shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98]"
                 >
-                  <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center flex-shrink-0">
-                    <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center flex-shrink-0">
+                    <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
                   </div>
-                  <span className="flex-1">{action.label}</span>
+                  <span className="flex-1 truncate">{action.label}</span>
             </button>
               ))}
             </div>
@@ -1765,14 +2027,14 @@ export default function AiTutor() {
       {/* Unity Avatar - Circle in Bottom Right */}
       {!avatarExpanded && (
           <div 
-            className="fixed bottom-6 right-6 z-40 cursor-pointer group"
+            className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-40 cursor-pointer group"
             onClick={handleExpandAvatar}
             title="Click to expand avatar"
           >
             {/* Circular Avatar Container */}
             <div className="relative">
               {/* Avatar Circle */}
-              <div className="w-32 h-32 rounded-full shadow-2xl hover:shadow-[0_0_40px_rgba(147,51,234,0.8)] transition-all duration-300 hover:scale-110 overflow-hidden ring-4 ring-purple-400 ring-opacity-50 hover:ring-opacity-100 hover:ring-purple-500">
+              <div className="w-20 h-20 sm:w-24 sm:h-24 md:w-32 md:h-32 rounded-full shadow-2xl hover:shadow-[0_0_40px_rgba(147,51,234,0.8)] transition-all duration-300 hover:scale-110 overflow-hidden ring-2 sm:ring-4 ring-purple-400 ring-opacity-50 hover:ring-opacity-100 hover:ring-purple-500">
                 <iframe 
                   src="/WebGL/index.html" 
                   title="AI Tutor Avatar" 
@@ -1788,8 +2050,8 @@ export default function AiTutor() {
               </div>
               
               {/* Expand indicator - appears on hover */}
-              <div className="absolute -bottom-2 -right-2 w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 shadow-xl ring-2 ring-white">
-                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="absolute -bottom-1 -right-1 sm:-bottom-2 sm:-right-2 w-7 h-7 sm:w-8 sm:h-8 md:w-10 md:h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 shadow-xl ring-2 ring-white">
+                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4 md:w-5 md:h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
                 </svg>
               </div>
@@ -1798,7 +2060,7 @@ export default function AiTutor() {
               <div className="absolute inset-0 rounded-full bg-purple-500/20 animate-ping opacity-75"></div>
               
               {/* Status indicator */}
-              <div className="absolute top-0 right-0 w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow-lg"></div>
+              <div className="absolute top-0 right-0 w-2.5 h-2.5 sm:w-3 sm:h-3 md:w-4 md:h-4 bg-green-500 rounded-full border-1.5 sm:border-2 border-white shadow-lg"></div>
         </div>
       </div>
       )}
@@ -1844,6 +2106,15 @@ export default function AiTutor() {
         title="Key Points"
         icon="✨"
       />
+      
+      {/* Token Limit Modal */}
+      {tokenLimitData && (
+        <TokenLimitModal
+          isOpen={showTokenLimitModal}
+          onClose={closeTokenLimitModal}
+          data={tokenLimitData}
+        />
+      )}
         </>
       )}
     </div>

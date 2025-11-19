@@ -129,10 +129,8 @@ export const documentService = {
       };
     } catch (error: any) {
       console.error('Error generating notes:', error);
-      return {
-        success: false,
-        message: error.response?.data?.message || 'Failed to generate notes'
-      };
+      // ✅ Re-throw error so frontend can check status code and detail
+      throw error;
     }
   },
 
@@ -153,10 +151,8 @@ export const documentService = {
       };
     } catch (error: any) {
       console.error('Error generating quiz:', error);
-      return {
-        success: false,
-        message: error.response?.data?.message || 'Failed to generate quiz'
-      };
+      // ✅ Re-throw error so frontend can check status code and detail
+      throw error;
     }
   },
 
